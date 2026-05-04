@@ -1,0 +1,112 @@
+{
+  "name": "inspyro-desktop",
+  "version": "1.0.0",
+  "description": "AI-native engineering workspace for calculations, notebooks and report generation.",
+  "author": "Inspyro",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "wait-on http://127.0.0.1:3000 http://127.0.0.1:8000/health && electron .",
+    "dev:full": "node scripts/dev-full.mjs",
+    "smoke:renderer": "node scripts/smoke-renderer.cjs",
+    "smoke:packaged": "node scripts/smoke-packaged.cjs",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "stage": "node scripts/stage-resources.mjs",
+    "pack": "npm run build:frontend && npm run stage && electron-builder --dir",
+    "dist": "npm run build:frontend && npm run stage && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.inspyro.desktop",
+    "productName": "Inspyro",
+    "copyright": "Copyright (c) 2026 Inspyro",
+    "artifactName": "Inspyro-Setup-${version}-${arch}.${ext}",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash-preload.js",
+      "splash.html",
+      "assets/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".stage/backend",
+        "to": "backend"
+      },
+      {
+        "from": ".stage/frontend-build",
+        "to": "frontend-build"
+      },
+      {
+        "from": ".stage/python",
+        "to": "python"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "publisherName": "Inspyro",
+      "requestedExecutionLevel": "asInvoker",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "fileAssociations": [
+      {
+        "ext": "ipynb",
+        "name": "Jupyter Notebook",
+        "description": "Notebook de calculo Inspyro",
+        "role": "Editor",
+        "icon": "assets/icon.ico"
+      },
+      {
+        "ext": "py",
+        "name": "Python Script",
+        "description": "Script Python para Inspyro",
+        "role": "Editor",
+        "icon": "assets/icon.ico"
+      },
+      {
+        "ext": "inspyro",
+        "name": "Inspyro Workspace",
+        "description": "Archivo de workspace Inspyro",
+        "role": "Editor",
+        "icon": "assets/icon.ico"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Inspyro",
+        "schemes": [
+          "inspyro"
+        ]
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Inspyro",
+      "uninstallDisplayName": "Inspyro",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

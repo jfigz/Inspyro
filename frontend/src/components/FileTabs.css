@@ -1,0 +1,388 @@
+/* =====================================================================
+   INSPYRO - File Tabs Styles
+   Integrated shell strip for open resources
+   ===================================================================== */
+
+.file-tabs {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  min-height: 40px;
+  background: linear-gradient(
+    180deg,
+    rgba(22, 27, 34, 0.98) 0%,
+    rgba(18, 23, 30, 0.98) 100%
+  );
+  border-bottom: 1px solid rgba(139, 148, 158, 0.16);
+  box-shadow: inset 0 1px 0 rgba(240, 246, 252, 0.03);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.file-tabs.empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-message {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+/* ==================== SCROLL CONTAINER ==================== */
+.tabs-scroll-container {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tabs-scroll-container::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs-list {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  min-width: max-content;
+  gap: 2px;
+  padding: 5px 10px 0 8px;
+}
+
+/* ==================== FILE TAB ==================== */
+.file-tab {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 16px 22px;
+  align-items: center;
+  gap: 6px;
+  height: 35px;
+  min-width: 132px;
+  max-width: 240px;
+  padding: 0 7px 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.file-tab::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  height: 2px;
+  border-radius: 999px 999px 0 0;
+  background: transparent;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.file-tab:hover {
+  background: rgba(139, 148, 158, 0.08);
+  color: var(--color-text-primary);
+}
+
+.file-tab.active {
+  background: rgba(88, 166, 255, 0.1);
+  border-color: rgba(88, 166, 255, 0.26);
+  color: var(--color-text-primary);
+  box-shadow:
+    inset 0 1px 0 rgba(240, 246, 252, 0.06),
+    0 1px 0 rgba(0, 0, 0, 0.12);
+}
+
+.file-tab.active::after {
+  background: var(--color-accent-primary);
+}
+
+/* ==================== TAB ICON ==================== */
+.tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+}
+
+.tab-icon .explorer-svg-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  filter: drop-shadow(0 0.5px 0.5px rgba(0, 0, 0, 0.08));
+}
+
+/* ==================== TAB NAME ==================== */
+.tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==================== MODIFIED INDICATOR ==================== */
+.modified-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--color-warning);
+}
+
+.modified-indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.12);
+}
+
+/* ==================== CLOSE BUTTON ==================== */
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.tab-close svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.file-tab:hover .tab-close,
+.file-tab.active .tab-close,
+.file-tab:focus-within .tab-close {
+  opacity: 1;
+}
+
+.file-tab.modified:not(:hover):not(:focus-within):not(.active) .tab-close {
+  opacity: 0;
+}
+
+.file-tab.modified:not(:hover):not(:focus-within):not(.active) .modified-indicator {
+  opacity: 1;
+}
+
+.file-tab.modified:hover .modified-indicator,
+.file-tab.modified:focus-within .modified-indicator,
+.file-tab.modified.active .modified-indicator {
+  opacity: 0.65;
+}
+
+.tab-close:hover {
+  background: var(--color-error-muted);
+  color: var(--color-error);
+}
+
+.tab-close:focus-visible {
+  outline: 1px solid var(--color-accent-primary);
+  outline-offset: 1px;
+}
+
+/* ==================== TABS ACTIONS ==================== */
+.tabs-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 0 7px;
+  border-left: 1px solid rgba(139, 148, 158, 0.12);
+}
+
+.save-all-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: rgba(63, 185, 80, 0.1);
+  border: 1px solid rgba(63, 185, 80, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--color-success);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.save-all-btn svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.save-all-btn:hover {
+  background: rgba(63, 185, 80, 0.16);
+  border-color: rgba(63, 185, 80, 0.34);
+  color: var(--color-text-primary);
+}
+
+.save-all-btn:focus-visible {
+  outline: 1px solid var(--color-success);
+  outline-offset: 2px;
+}
+
+/* ==================== DRAG & DROP ==================== */
+.file-tabs.drag-over {
+  background: var(--color-bg-active);
+  border-color: var(--color-accent-primary);
+}
+
+.file-tab.dragging {
+  opacity: 0.5;
+}
+
+/* ==================== FOCUS ==================== */
+.file-tab:focus {
+  outline: none;
+}
+
+.file-tab:focus-visible {
+  border-color: rgba(88, 166, 255, 0.42);
+  outline: 1px solid rgba(88, 166, 255, 0.7);
+  outline-offset: -1px;
+}
+
+/* ==================== RESPONSIVE ==================== */
+@media (max-width: 768px) {
+  .file-tabs {
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .tabs-list {
+    padding: 4px 8px 0 6px;
+  }
+
+  .file-tab {
+    grid-template-columns: 20px minmax(0, 1fr) 12px 20px;
+    height: 32px;
+    min-width: 112px;
+    max-width: 176px;
+    gap: 5px;
+    padding: 0 6px;
+    font-size: var(--text-xs);
+  }
+
+  .tab-icon,
+  .tab-close {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tab-icon .explorer-svg-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .modified-indicator {
+    width: 12px;
+  }
+
+  .tabs-actions {
+    min-width: 36px;
+    padding: 0 5px;
+  }
+
+  .save-all-btn {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/* ==================== AUTO-SAVE INDICATOR ==================== */
+.file-tab.saving::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 0 0 999px 999px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--color-success) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: savingProgress 1s ease-in-out;
+}
+
+@keyframes savingProgress {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ==================== PINNED TABS ==================== */
+.file-tab.pinned {
+  grid-template-columns: 22px;
+  min-width: 40px;
+  max-width: 40px;
+  padding: 0 8px;
+}
+
+.file-tab.pinned .tab-name,
+.file-tab.pinned .tab-close,
+.file-tab.pinned .modified-indicator {
+  display: none;
+}
+
+/* ==================== OVERFLOW MENU (future) ==================== */
+.tabs-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid rgba(139, 148, 158, 0.12);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.tabs-overflow-btn:hover {
+  background: rgba(139, 148, 158, 0.08);
+  color: var(--color-text-primary);
+}

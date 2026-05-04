@@ -1,0 +1,158 @@
+.mcp-status-split {
+  display: inline-flex;
+  align-items: stretch;
+  margin-left: 8px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  background: rgba(255, 255, 255, 0.02);
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mcp-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mcp-status-btn--main {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mcp-status-btn:hover,
+.mcp-mirror-toggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+
+.mcp-status-btn .mcp-icon {
+  width: 13px;
+  height: 13px;
+  opacity: 0.7;
+}
+
+.mcp-status-btn:hover .mcp-icon {
+  opacity: 1;
+}
+
+.mcp-status-btn .mcp-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  max-width: 92px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1360px) {
+  .mcp-status-btn .mcp-label {
+    display: none;
+  }
+}
+
+.mcp-running-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.18);
+  color: #b8d8ff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.mcp-mirror-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  transition: all 0.2s ease;
+}
+
+@media (max-width: 520px) {
+  .mcp-mirror-toggle {
+    min-width: 30px;
+    padding: 0 6px;
+  }
+}
+
+.mcp-mirror-toggle.mirror-on {
+  background: rgba(63, 185, 80, 0.12);
+  color: #a5d6a7;
+}
+
+.mcp-mirror-toggle.mirror-off {
+  background: rgba(248, 81, 73, 0.08);
+  color: #ffb4ac;
+}
+
+.mcp-mirror-toggle__label {
+  transform: translateY(0.5px);
+}
+
+.mcp-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mcp-indicator.mcp-stopped {
+  background: var(--color-text-tertiary);
+  box-shadow: 0 0 3px rgba(110, 118, 129, 0.5);
+}
+
+.mcp-indicator.mcp-starting {
+  background: #f0a030;
+  box-shadow: 0 0 6px rgba(240, 160, 48, 0.6);
+  animation: mcp-pulse 1.2s ease-in-out infinite;
+}
+
+.mcp-indicator.mcp-running {
+  background: var(--color-success);
+  box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
+}
+
+.mcp-indicator.mcp-error {
+  background: var(--color-error);
+  box-shadow: 0 0 6px rgba(248, 81, 73, 0.6);
+}
+
+.mcp-status-split.mcp-running {
+  border-color: rgba(63, 185, 80, 0.3);
+  box-shadow: 0 0 0 1px rgba(63, 185, 80, 0.12);
+}
+
+.mcp-status-split.mcp-error {
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+@keyframes mcp-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}

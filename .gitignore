@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg-info/
+*.egg
+
+# Virtual envs
+venv/
+venv_inspyro/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/build/
+desktop/.stage/
+desktop/dist/
+build/
+dist/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Env
+.env
+.env.*
+
+# Cache/coverage
+.pytest_cache/
+.coverage
+coverage.xml
+
+# Jupyter
+*.ipynb_checkpoints
+
+# Logs
+*.log
+.agent_logs/
+
+# Local/runtime caches
+.codex/
+.inspyro/
+.playwright-mcp/
+.template_tokens/
+backend/.templates/
+backend/.template_tokens/
+frontend/playwright-report/
+frontend/test-results/
+_agent_runs/
+mcp-iter-smoke/
+mcp-ui-mirror-smoke/
+
+# Generated document/test artifacts
+Docx_Documents/
+output/
+output/playwright/
+backend/tmp/
+backend/backend/tmp/
+*.zip
+
+# Local screenshots and release prep captures
+cloudflare-*.png
+hostinger-*.png
+openpyro-v3*.png
+webpage-v3*.png
+inspyro-webpage-v3-current.png
+file-tabs-integrated*.png
+dependency-capacity*.png
+desktop-dependency*.png
+mobile-*.png
+
+# Sandbox
+sandbox/

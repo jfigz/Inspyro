@@ -1,0 +1,200 @@
+/* =====================================================================
+   INSPYRO - StatusBar Styles (v2)
+   Barra de estado expandible y scrollable
+   ===================================================================== */
+
+.status-bar-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 250px;
+  max-width: 400px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  transition: all var(--transition-base);
+  z-index: 1000;
+  cursor: pointer;
+  max-height: 32px;
+  /* Altura colapsada */
+}
+
+/* Estado Expandido (Dropdown) */
+.status-bar-container.expanded {
+  position: absolute;
+  /* Flotar sobre otros elementos */
+  top: 8px;
+  /* Ajuste relativo al header */
+  /* Centrar horizontalmente si se desea, o alinear */
+  max-height: 300px;
+  height: auto;
+  box-shadow: var(--shadow-lg);
+  border-color: var(--color-border-active);
+  background: var(--color-bg-secondary);
+  overflow: hidden;
+  width: 350px;
+  /* Ancho fijo al expandir */
+}
+
+.status-bar-empty {
+  min-width: 50px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.status-bar-content {
+  width: 100%;
+  overflow-y: auto;
+}
+
+/* ==================== COMPACT VIEW ==================== */
+.status-item-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  height: 30px;
+  width: 100%;
+}
+
+.expand-hint {
+  margin-left: auto;
+  opacity: 0.5;
+  display: flex;
+  align-items: center;
+}
+
+/* ==================== EXPANDED HISTORY ==================== */
+.status-history-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.status-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border-default);
+  margin-bottom: 4px;
+  background: var(--color-bg-tertiary);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.clear-history-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.clear-history-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-error);
+}
+
+.status-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  animation: fadeIn 0.2s ease-in;
+}
+
+.status-item:last-child {
+  border-bottom: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.item-time {
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.item-text {
+  flex: 1;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+/* ==================== TYPE VARIANTS (Colors) ==================== */
+
+/* Info */
+.item-info .item-icon {
+  color: var(--color-info);
+}
+
+.item-info.status-item-compact {
+  border-left: 3px solid var(--color-info);
+}
+
+/* Success */
+.item-success .item-icon {
+  color: var(--color-success);
+}
+
+.item-success.status-item-compact {
+  border-left: 3px solid var(--color-success);
+}
+
+/* Warning */
+.item-warning .item-icon {
+  color: var(--color-warning);
+}
+
+.item-warning.status-item-compact {
+  border-left: 3px solid var(--color-warning);
+}
+
+/* Error */
+.item-error .item-icon {
+  color: var(--color-error);
+}
+
+.item-error.status-item-compact {
+  border-left: 3px solid var(--color-error);
+}
+
+.item-error {
+  background: rgba(248, 81, 73, 0.05);
+}
+
+/* Hover effect on items in list */
+.status-item:hover {
+  background: var(--color-bg-hover);
+}

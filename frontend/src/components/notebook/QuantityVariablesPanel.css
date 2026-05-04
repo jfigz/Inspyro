@@ -1,0 +1,122 @@
+.quantity-vars {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+
+.quantity-vars__card {
+    border: 1px solid var(--color-border-default, #2b2f36);
+    border-radius: 10px;
+    padding: 10px;
+    background: linear-gradient(180deg, rgba(70, 84, 104, 0.22), rgba(30, 38, 49, 0.22));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.quantity-vars__header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+.quantity-vars__name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text-primary, #e8edf5);
+    letter-spacing: 0.01em;
+}
+
+.quantity-vars__category {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--color-text-secondary, #aeb8c5);
+    text-transform: uppercase;
+}
+
+.quantity-vars__value {
+    display: flex;
+    align-items: center;
+}
+
+.quantity-vars__dimension {
+    font-size: 11px;
+    font-family: "Consolas", "Courier New", monospace;
+    color: var(--color-text-tertiary, #7f8a9a);
+}
+
+.quantity-vars__convert {
+    display: flex;
+    gap: 8px;
+}
+
+.quantity-vars__convert select,
+.quantity-vars__convert button {
+    border: 1px solid var(--color-border-default, #2b2f36);
+    border-radius: 8px;
+    background: var(--color-bg-secondary, #191f28);
+    color: var(--color-text-primary, #e8edf5);
+    font-size: 12px;
+    padding: 6px 8px;
+}
+
+.quantity-vars__convert select {
+    flex: 1;
+}
+
+.quantity-vars__convert button {
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 120ms ease, color 120ms ease;
+}
+
+.quantity-vars__convert button:hover:enabled {
+    border-color: #64b5f6;
+    color: #64b5f6;
+}
+
+.quantity-vars__convert button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.quantity-vars__feedback {
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.quantity-vars__feedback--success {
+    color: #6edc95;
+}
+
+.quantity-vars__feedback--error {
+    color: #ff8c8c;
+}
+
+.variables-empty-state {
+    flex: 1;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--color-text-secondary, #9ba8b8);
+    text-align: center;
+    padding: 20px 16px;
+}
+
+.variables-empty-state__icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(100, 181, 246, 0.16);
+    color: #64b5f6;
+    font-weight: 700;
+}

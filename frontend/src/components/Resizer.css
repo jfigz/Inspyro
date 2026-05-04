@@ -1,0 +1,157 @@
+.app-resizer {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  user-select: none;
+  touch-action: none;
+  z-index: var(--z-dropdown);
+  cursor: col-resize;
+  transition: background-color var(--transition-base), opacity var(--transition-base);
+}
+
+.app-resizer--horizontal {
+  width: var(--resizer-lane-size);
+  min-width: var(--resizer-lane-size);
+  height: 100%;
+  cursor: col-resize;
+}
+
+.app-resizer--vertical {
+  width: 100%;
+  height: var(--resizer-lane-size);
+  min-height: var(--resizer-lane-size);
+  cursor: row-resize;
+}
+
+.app-resizer__lane {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-resizer__lane::before {
+  content: '';
+  position: absolute;
+  border-radius: var(--radius-full);
+  background: var(--resizer-track);
+  transition:
+    background-color var(--transition-base),
+    opacity var(--transition-base),
+    transform var(--transition-base);
+}
+
+.app-resizer--horizontal .app-resizer__lane::before {
+  top: 12px;
+  bottom: 12px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.app-resizer--vertical .app-resizer__lane::before {
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.app-resizer__grip {
+  position: relative;
+  display: block;
+  border-radius: var(--radius-full);
+  background: var(--resizer-grip);
+  box-shadow: 0 0 0 1px rgba(13, 17, 23, 0.28);
+  opacity: 0.92;
+  transition:
+    background-color var(--transition-base),
+    box-shadow var(--transition-base),
+    width var(--transition-base),
+    height var(--transition-base),
+    opacity var(--transition-base),
+    transform var(--transition-base);
+}
+
+.app-resizer--horizontal .app-resizer__grip {
+  width: var(--resizer-grip-thickness);
+  height: var(--resizer-grip-length);
+}
+
+.app-resizer--vertical .app-resizer__grip {
+  width: var(--resizer-grip-length);
+  height: var(--resizer-grip-thickness);
+}
+
+.app-resizer:hover,
+.app-resizer:focus-visible,
+.app-resizer--dragging {
+  background:
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(88, 166, 255, 0.06) 18%,
+      rgba(88, 166, 255, 0.1) 50%,
+      rgba(88, 166, 255, 0.06) 82%,
+      transparent 100%
+    );
+}
+
+.app-resizer:hover .app-resizer__lane::before,
+.app-resizer:focus-visible .app-resizer__lane::before,
+.app-resizer--dragging .app-resizer__lane::before {
+  background: var(--resizer-track-hover);
+}
+
+.app-resizer:hover .app-resizer__grip,
+.app-resizer:focus-visible .app-resizer__grip,
+.app-resizer--dragging .app-resizer__grip {
+  background: var(--resizer-grip-hover);
+  box-shadow:
+    0 0 0 1px rgba(88, 166, 255, 0.18),
+    0 0 18px rgba(88, 166, 255, 0.14);
+  opacity: 1;
+}
+
+.app-resizer--horizontal:hover .app-resizer__grip,
+.app-resizer--horizontal:focus-visible .app-resizer__grip,
+.app-resizer--horizontal.app-resizer--dragging .app-resizer__grip {
+  width: var(--resizer-grip-thickness-hover);
+}
+
+.app-resizer--vertical:hover .app-resizer__grip,
+.app-resizer--vertical:focus-visible .app-resizer__grip,
+.app-resizer--vertical.app-resizer--dragging .app-resizer__grip {
+  height: var(--resizer-grip-thickness-hover);
+}
+
+.app-resizer:active .app-resizer__grip,
+.app-resizer--dragging .app-resizer__grip {
+  transform: scale(1.03);
+}
+
+body.app-resizer-dragging-horizontal,
+body.app-resizer-dragging-horizontal * {
+  cursor: col-resize !important;
+}
+
+body.app-resizer-dragging-vertical,
+body.app-resizer-dragging-vertical * {
+  cursor: row-resize !important;
+}
+
+body.app-resizer-dragging-horizontal,
+body.app-resizer-dragging-vertical {
+  user-select: none;
+}
+
+@media (max-width: 1024px) {
+  .app-resizer {
+    display: none;
+  }
+}

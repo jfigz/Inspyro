@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inspyro Boot</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-deep: #0d1117;
+      --bg-card: rgba(18, 22, 31, 0.96);
+      --border: rgba(74, 222, 128, 0.22);
+      --text-main: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #22c55e;
+      --accent-soft: rgba(34, 197, 94, 0.16);
+      --warm-soft: rgba(245, 158, 11, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      color: var(--text-main);
+      background:
+        radial-gradient(circle at top left, rgba(34, 197, 94, 0.14), transparent 45%),
+        radial-gradient(circle at bottom right, rgba(245, 158, 11, 0.08), transparent 35%),
+        var(--bg-deep);
+      display: grid;
+      place-items: center;
+    }
+
+    .boot-card {
+      width: 440px;
+      padding: 28px 28px 24px;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: var(--bg-card);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    }
+
+    .boot-card[data-status="error"] {
+      border-color: rgba(248, 81, 73, 0.28);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(248, 81, 73, 0.08);
+    }
+
+    .boot-brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .boot-logo {
+      width: 62px;
+      height: 62px;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      overflow: visible;
+    }
+
+    .boot-brand-mark {
+      width: 58px;
+      height: 58px;
+      object-fit: contain;
+      display: block;
+      filter: drop-shadow(0 0 14px rgba(34, 197, 94, 0.22));
+    }
+
+    .boot-brand-copy h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: -0.02em;
+    }
+
+    .boot-brand-copy p {
+      margin: 4px 0 0;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .boot-stage {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    .boot-detail {
+      min-height: 20px;
+      margin: 0 0 22px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .boot-progress {
+      width: 100%;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      position: relative;
+    }
+
+    .boot-progress::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 42%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #81c995);
+      box-shadow: 0 0 18px rgba(34, 197, 94, 0.45);
+      animation: loading 1.4s ease-in-out infinite;
+    }
+
+    .boot-card[data-status="error"] .boot-progress::before {
+      background: linear-gradient(90deg, #f85149, #d29922);
+      animation-duration: 2.6s;
+    }
+
+    .boot-diagnostic {
+      display: none;
+      margin: 18px 0 0;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(13, 17, 23, 0.85);
+      color: #c9d1d9;
+      font-family: Consolas, "Source Code Pro", monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 120px;
+      overflow: auto;
+    }
+
+    .boot-diagnostic[data-visible="true"] {
+      display: block;
+    }
+
+    .boot-actions {
+      display: none;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .boot-actions[data-visible="true"] {
+      display: flex;
+    }
+
+    .boot-action-btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--text-main);
+    }
+
+    .boot-action-btn.secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+    }
+
+    .boot-foot {
+      margin-top: 18px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .boot-pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #86efac;
+      font-weight: 600;
+    }
+
+    @keyframes loading {
+      0% { transform: translateX(-120%); }
+      50% { transform: translateX(120%); }
+      100% { transform: translateX(240%); }
+    }
+  </style>
+</head>
+<body>
+  <main class="boot-card" id="boot-card" data-status="loading">
+    <div class="boot-brand">
+      <div class="boot-logo" role="img" aria-label="Inspyro brand mark">
+        <img class="boot-brand-mark" src="assets/inspyro-mark-light.png" alt="" aria-hidden="true" />
+      </div>
+      <div class="boot-brand-copy">
+        <h1>Inspyro</h1>
+        <p>AI-native engineering workspace</p>
+      </div>
+    </div>
+
+    <p class="boot-stage" id="boot-stage">Initializing shell</p>
+    <p class="boot-detail" id="boot-detail">Preparing Inspyro...</p>
+
+    <div class="boot-progress" aria-hidden="true"></div>
+    <pre class="boot-diagnostic" id="boot-diagnostic" data-visible="false"></pre>
+    <div class="boot-actions" id="boot-actions" data-visible="false">
+      <button type="button" class="boot-action-btn" id="boot-retry">Retry</button>
+      <button type="button" class="boot-action-btn secondary" id="boot-quit">Quit</button>
+    </div>
+
+    <div class="boot-foot">
+      <span>Agents, calculations, DOCX/PDF</span>
+      <span class="boot-pill">Electron</span>
+    </div>
+  </main>
+</body>
+</html>

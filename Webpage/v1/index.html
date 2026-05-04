@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Inspyro - IDE Web orientado a ingenierías y ciencias con Jupyter, DOCX/PDF y grafos interactivos.">
+    <title>Inspyro | Engineering Generative Simulator & IDE</title>
+    
+    <!-- Google Fonts: Outfit for modern look -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background Animated Canvas (Particles or Grid) -->
+    <canvas id="bg-canvas"></canvas>
+
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <span class="logo-mark"></span>
+                <span class="logo-text">Open<span class="logo-highlight">Pyro</span></span>
+            </div>
+            <div class="nav-links">
+                <a href="#features">Características</a>
+                <a href="#about">Proyecto</a>
+                <a href="https://github.com/jfigz/Inspyro" target="_blank" class="nav-link-secondary">GitHub</a>
+                <a href="#download" class="btn btn-primary btn-small">Descargar</a>
+            </div>
+            <button class="mobile-menu-btn" aria-label="Menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="hero" id="home">
+        <div class="hero-content">
+            <div class="badge">Nuevo Proyecto Insignia</div>
+            <h1 class="hero-title">
+                El IDE del futuro para <br>
+                <span class="gradient-text">Ingeniería y Ciencias</span>
+            </h1>
+            <p class="hero-subtitle">
+                Inspyro combina la potencia de Jupyter Notebooks con generación nativa de documentos DOCX/PDF, grafos de dependencias y agentes IA. 
+            </p>
+            <div class="hero-cta">
+                <a href="#download" class="btn btn-primary btn-glow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 16L7 11L8.4 9.55L11 12.15V4H13V12.15L15.6 9.55L17 11L12 16ZM6 20C5.45 20 4.97917 19.8042 4.5875 19.4125C4.19583 19.0208 4 18.55 4 18V15H6V18H18V15H20V18C20 18.55 19.8042 19.0208 19.4125 19.4125C19.0208 19.8042 18.55 20 18 20H6Z" fill="currentColor"/>
+                    </svg>
+                    Descargar para Windows
+                </a>
+                <a href="#features" class="btn btn-secondary">Explorar Funciones</a>
+            </div>
+            
+            <!-- Code Editor Mockup for aesthetic -->
+            <div class="hero-mockup">
+                <div class="mockup-header">
+                    <div class="mockup-dots"><span></span><span></span><span></span></div>
+                    <div class="mockup-title">structural_analysis.ipynb</div>
+                </div>
+                <div class="mockup-body">
+                    <pre><code class="language-python"><span class="keyword">import</span> inspyro.docx <span class="keyword">as</span> docx
+<span class="keyword">import</span> inspyro.graphs <span class="keyword">as</span> graphs
+
+<span class="comment"># Inicializar modelo estructural</span>
+model = docx.DocumentBuilder(template=<span class="string">"engineering_v2"</span>)
+
+<span class="comment"># Ejecutar análisis y generar reporte</span>
+results = await model.evaluate_stresses()
+model.export(<span class="string">"reporte_final.pdf"</span>)</code></pre>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <div class="section-header">
+            <h2 class="section-title">Construido para <span class="gradient-text">Profesionales</span></h2>
+            <p class="section-description">Herramientas potentes integradas en un único entorno de trabajo local y seguro.</p>
+        </div>
+
+        <div class="features-grid">
+            <!-- Feature 1 -->
+            <div class="feature-card glass-panel">
+                <div class="feature-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m3 15 2 2 4-4"/></svg>
+                </div>
+                <h3>Notebooks Jupyter</h3>
+                <p>Ejecución local de Python con kernel real y autocompletado LSP integrado de primer nivel.</p>
+            </div>
+            <!-- Feature 2 -->
+            <div class="feature-card glass-panel">
+                <div class="feature-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                </div>
+                <h3>Reportes DOCX / PDF</h3>
+                <p>Generación de documentos paramétricos desde código. Tu código es tu memoria de cálculo.</p>
+            </div>
+            <!-- Feature 3 -->
+            <div class="feature-card glass-panel">
+                <div class="feature-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                </div>
+                <h3>Grafos Interactivos</h3>
+                <p>Visualiza dependencias, flujos y sensibilidad estructural con trazabilidad completa.</p>
+            </div>
+            <!-- Feature 4 -->
+            <div class="feature-card glass-panel">
+                <div class="feature-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/><path d="M9 14h6"/><path d="M9 11h6"/></svg>
+                </div>
+                <h3>Agentes IA (MCP)</h3>
+                <p>Servidor MCP integrado. Permite a modelos como Claude o Gemini leer y modificar tu trabajo de ingeniería.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section class="about" id="about">
+        <div class="about-container glass-panel">
+            <div class="about-content">
+                <h2>¿Qué es OpenPyro?</h2>
+                <p>
+                    OpenPyro es una iniciativa de código abierto que busca democratizar herramientas de simulación, diseño y cálculo estructural. 
+                    Creemos que la ingeniería debe ser transparente, programable y altamente eficiente.
+                </p>
+                <p>
+                    <strong>Inspyro</strong> es nuestro primer gran proyecto: una interfaz (IDE) construida desde cero pensada para el profesional moderno, encapsulada en una aplicación Windows ultrarrápida.
+                </p>
+            </div>
+            <div class="about-visual">
+                <div class="glow-orb"></div>
+                <div class="logo-large">
+                    <span class="logo-mark-large"></span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download CTA Section -->
+    <section class="download-section" id="download">
+        <div class="cta-box glass-panel">
+            <h2>Empieza a construir el futuro</h2>
+            <p>Descarga la última versión de Inspyro y experimenta un entorno de ingeniería sin fricciones.</p>
+            <a href="#" class="btn btn-primary btn-large btn-glow">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M22 2L11.2 3.6L11.2 11.4L22 11.4L22 2ZM10.5 3.7L2 4.9L2 11.4L10.5 11.4L10.5 3.7ZM2 12.6L2 19.1L10.5 20.3L10.5 12.6L2 12.6ZM11.2 12.6L11.2 20.4L22 22L22 12.6L11.2 12.6Z" fill="currentColor"/>
+                </svg>
+                Descargar para Windows (x64)
+            </a>
+            <p class="version-info">Versión beta • Shell Desktop Integrado</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-brand">
+                <div class="logo">
+                    <span class="logo-mark"></span>
+                    <span class="logo-text">Open<span class="logo-highlight">Pyro</span></span>
+                </div>
+                <p>Innovación en ingeniería open source.</p>
+            </div>
+            <div class="footer-links">
+                <div class="link-column">
+                    <h4>Proyecto</h4>
+                    <a href="#features">Características</a>
+                    <a href="#about">Acerca de</a>
+                    <a href="#download">Descargas</a>
+                </div>
+                <div class="link-column">
+                    <h4>Comunidad</h4>
+                    <a href="https://github.com/jfigz/Inspyro">GitHub</a>
+                    <a href="#">Documentación</a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2026 OpenPyro. Todos los derechos reservados.</p>
+        </div>
+    </footer>
+
+    <script src="main.js"></script>
+</body>
+</html>

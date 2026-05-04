@@ -1,0 +1,186 @@
+.notebook-index-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 56px;
+  background: linear-gradient(180deg, rgba(16, 22, 29, 0.98) 0%, rgba(11, 16, 22, 0.98) 100%);
+}
+
+.notebook-index-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-border-default);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.notebook-index-panel__title-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notebook-index-panel__eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.notebook-index-panel__title-heading {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.notebook-index-panel__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.notebook-index-panel__toggle:hover {
+  background: var(--color-bg-hover);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+
+.notebook-index-panel__toggle svg,
+.notebook-index-panel__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.notebook-index-panel__toggle .is-expanded,
+.notebook-index-panel__chevron .is-expanded {
+  transform: rotate(90deg);
+}
+
+.notebook-index-panel__content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) 0;
+}
+
+.notebook-index-panel__empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  color: var(--color-text-secondary);
+}
+
+.notebook-index-panel__empty strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+}
+
+.notebook-index-panel__empty p {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.notebook-index-panel__tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.notebook-index-panel__row {
+  --notebook-index-depth: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 2px var(--space-2) 2px calc(var(--space-3) + (var(--notebook-index-depth) * 14px));
+}
+
+.notebook-index-panel__row.is-active {
+  background: rgba(88, 166, 255, 0.12);
+}
+
+.notebook-index-panel__chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.notebook-index-panel__chevron:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+}
+
+.notebook-index-panel__chevron.is-placeholder {
+  cursor: default;
+}
+
+.notebook-index-panel__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.notebook-index-panel__link:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.notebook-index-panel__row.is-active .notebook-index-panel__link {
+  border-color: rgba(88, 166, 255, 0.24);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.notebook-index-panel__level {
+  flex-shrink: 0;
+  min-width: 24px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-accent-primary);
+}
+
+.notebook-index-panel__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 768px) {
+  .notebook-index-panel {
+    min-height: 52px;
+  }
+}

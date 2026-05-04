@@ -1,0 +1,69 @@
+﻿meta:
+  updated_at: "2026-04-25"
+  purpose: "Mapeo intención -> rutas -> checks para agentes"
+
+routes:
+  backend_change:
+    read_first:
+      - "docs/llm-index.yaml"
+      - "docs/architecture/contracts-catalog.md"
+      - "docs/modules/04-notebook-handlers.md"
+      - "docs/modules/09-jupyter-kernel.md"
+    checks:
+      - ".\\agent_debug.ps1 contracts-check"
+      - ".\\agent_debug.ps1 verify-fast"
+
+  frontend_change:
+    read_first:
+      - "docs/llm-index.yaml"
+      - "docs/architecture/frontend-flow.md"
+      - "docs/modules/14-main-app.md"
+      - "docs/modules/17-template-editor.md"
+    checks:
+      - ".\\agent_debug.ps1 verify-fast"
+
+  docx_quality_change:
+    read_first:
+      - "docs/llm-index.yaml"
+      - "docs/modules/01-document-generation-docx.md"
+      - "docs/modules/14-main-app.md"
+      - "docs/modules/17-template-editor.md"
+      - "docs/modules/19-mcp-server.md"
+      - "docs/architecture/frontend-flow.md"
+    checks:
+      - ".\\venv_inspyro\\Scripts\\python.exe -m pytest backend/tests/test_docx_quality.py -q"
+      - "cd backend; ..\\venv_inspyro\\Scripts\\python.exe -m pytest tests/test_mcp_server_remediation.py tests/test_mcp_ai_first.py -q"
+      - "cd frontend; npm test -- --watchAll=false --runInBand DocxViewer.test.js AgentWorkspaceHome.test.js TemplateEditorContainer.test.js"
+      - ".\\agent_debug.ps1 docs-check"
+      - ".\\agent_debug.ps1 verify-fast"
+    notes:
+      - "Si el cambio toca QA visual DOCX, validar que `render_manifest` sea lectura compacta/cache-backed y que `render_page`/`render_all_pages` devuelvan `resource_uri` sin blobs inline."
+      - "No usar `Documents`, `artifact-tool`, Skia ni OffscreenCanvas en runtime de Inspyro; la fidelidad visual sigue en `pdf_converter.py` + PyMuPDF."
+
+  ui_playwright_validation:
+    read_first:
+      - "docs/llm-index.yaml"
+      - "docs/modules/16-ui-automation-guide.md"
+      - "docs/modules/14-main-app.md"
+      - "docs/agents/quickstart.md"
+    checks:
+      - ".\\agent_debug.ps1 playwright-e2e"
+      - ".\\agent_debug.ps1 verify-fast"
+
+  ws_contract_change:
+    read_first:
+      - "backend/main.py"
+      - "docs/architecture/contracts-catalog.md"
+      - "docs/llm-index.yaml"
+      - "docs/architecture/synergy-matrix.md"
+    checks:
+      - ".\\agent_debug.ps1 contracts-check"
+      - ".\\agent_debug.ps1 docs-check"
+      - ".\\agent_debug.ps1 verify-fast"
+
+  pre_merge:
+    read_first:
+      - "docs/llm-index.yaml"
+      - "docs/architecture/contracts-catalog.md"
+    checks:
+      - ".\\agent_debug.ps1 verify"

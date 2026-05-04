@@ -1,0 +1,261 @@
+/* NotebookToolbar.css - Estilos para la barra compacta del notebook */
+
+.notebook-toolbar-compact {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.notebook-toolbar-compact::-webkit-scrollbar {
+    display: none;
+}
+
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+.toolbar-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--color-border-default);
+    margin: 0 var(--space-1);
+    opacity: 0.5;
+}
+
+/* Botón de icono base */
+.toolbar-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    flex: 0 0 auto;
+}
+
+.toolbar-icon-btn:hover:not(:disabled) {
+    background: var(--color-bg-hover);
+    border-color: var(--color-accent-primary);
+    color: var(--color-text-primary);
+    transform: translateY(-1px);
+}
+
+.toolbar-icon-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.toolbar-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Variantes de botón */
+.toolbar-icon-btn.primary {
+    background: linear-gradient(135deg, var(--color-success-emphasis) 0%, var(--color-success) 100%);
+    border-color: var(--color-success);
+    color: white;
+}
+
+.toolbar-icon-btn.primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-success) 0%, #2ea043 100%);
+    border-color: var(--color-success);
+    box-shadow: 0 2px 8px rgba(63, 185, 80, 0.3);
+}
+
+.toolbar-icon-btn.danger:hover:not(:disabled) {
+    background: var(--color-error-muted);
+    border-color: var(--color-error);
+    color: var(--color-error);
+}
+
+.toolbar-icon-btn.toggle.active {
+    background: var(--color-accent-muted);
+    border-color: var(--color-accent-primary);
+    color: var(--color-accent-primary);
+}
+
+/* === Colores sutiles para iconos del toolbar === */
+
+/* Agregar celdas - verde */
+.toolbar-icon-btn.add {
+    color: #5a9e68;
+}
+
+.toolbar-icon-btn.add:hover:not(:disabled) {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.1);
+    border-color: rgba(63, 185, 80, 0.4);
+}
+
+/* Kernel/Ejecución - amarillo/naranja */
+.toolbar-icon-btn.kernel {
+    color: #c9a227;
+}
+
+.toolbar-icon-btn.kernel:hover:not(:disabled) {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.4);
+}
+
+/* Guardar - azul */
+.toolbar-icon-btn.save {
+    color: #6b9fcc;
+}
+
+.toolbar-icon-btn.save:hover:not(:disabled) {
+    color: #8ab4f8;
+    background: rgba(138, 180, 248, 0.1);
+    border-color: rgba(138, 180, 248, 0.4);
+}
+
+/* Documento - púrpura */
+.toolbar-icon-btn.doc {
+    color: #a78bda;
+}
+
+.toolbar-icon-btn.doc:hover:not(:disabled) {
+    color: #c58af9;
+    background: rgba(197, 138, 249, 0.1);
+    border-color: rgba(197, 138, 249, 0.4);
+}
+
+/* Config - gris claro */
+.toolbar-icon-btn.config {
+    color: #9aa0a6;
+}
+
+.toolbar-icon-btn.config:hover:not(:disabled) {
+    color: #e2e2e2;
+    background: rgba(226, 226, 226, 0.1);
+    border-color: rgba(226, 226, 226, 0.3);
+}
+
+/* Input de archivo oculto */
+.toolbar-icon-btn.file-input {
+    cursor: pointer;
+}
+
+.dropdown-menu-container.toolbar-dropdown .dropdown-trigger {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+}
+
+.dropdown-menu-container.toolbar-dropdown.more-actions .dropdown-trigger {
+    color: #9aa0a6;
+}
+
+.dropdown-menu-container.toolbar-dropdown.more-actions .dropdown-trigger:hover {
+    color: #e2e2e2;
+    background: rgba(226, 226, 226, 0.1);
+    border-color: rgba(226, 226, 226, 0.3);
+}
+
+/* Indicador de Kernel */
+.kernel-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    box-sizing: border-box;
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-bg-tertiary);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border-default);
+    min-width: 0;
+    max-width: 104px;
+    flex: 0 0 auto;
+}
+
+.kernel-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.kernel-dot.active {
+    background: var(--color-success);
+    box-shadow: 0 0 6px rgba(63, 185, 80, 0.5);
+}
+
+.kernel-dot.interrupted {
+    background: var(--color-warning);
+    box-shadow: 0 0 6px rgba(210, 153, 34, 0.5);
+}
+
+.kernel-dot.inactive {
+    background: var(--color-text-tertiary);
+}
+
+.kernel-label {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 1360px) {
+    .notebook-toolbar-compact {
+        padding: 0;
+        gap: 2px;
+    }
+
+    .toolbar-icon-btn,
+    .dropdown-menu-container.toolbar-dropdown .dropdown-trigger {
+        width: 30px;
+        height: 30px;
+    }
+
+    .toolbar-separator {
+        margin: 0 1px;
+        opacity: 0.36;
+    }
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+    .kernel-label {
+        display: none;
+    }
+
+    .toolbar-separator {
+        margin: 0 2px;
+    }
+}
+
+@media (max-width: 600px) {
+    .notebook-toolbar-compact {
+        gap: 0;
+    }
+
+    .toolbar-icon-btn {
+        width: 28px;
+        height: 28px;
+    }
+
+    .toolbar-group {
+        gap: 1px;
+    }
+}

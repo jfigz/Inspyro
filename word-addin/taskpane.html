@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspyro Word Live</title>
+    <link rel="stylesheet" href="./taskpane.css" />
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Inspyro Companion</p>
+        <h1>Word Live</h1>
+        <p class="lede">Structured editing over content controls, bridged to Inspyro.</p>
+      </header>
+
+      <section class="panel">
+        <label class="field">
+          <span>Backend URL</span>
+          <input id="backend-url" type="text" value="http://localhost:8000" />
+        </label>
+        <label class="field">
+          <span>Document Path (optional, recommended for validation)</span>
+          <input id="document-path" type="text" placeholder="C:\path\to\report.docx" />
+        </label>
+        <div class="actions">
+          <button id="open-session">Open Session</button>
+          <button id="resync-session" class="ghost">Resync</button>
+          <button id="refresh-regions" class="ghost">Scan Regions</button>
+        </div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Selection</h2>
+          <label class="field">
+            <span>Region Tag</span>
+            <input id="region-tag" type="text" placeholder="region-intro" />
+          </label>
+          <label class="field">
+            <span>Region Title</span>
+            <input id="region-title" type="text" placeholder="Introduction" />
+          </label>
+          <div class="actions">
+            <button id="insert-text-control">Wrap Selection</button>
+            <button id="sync-selected" class="ghost">Sync Selected</button>
+          </div>
+        </div>
+        <div>
+          <h2>Mutations</h2>
+          <label class="field">
+            <span>Text Payload</span>
+            <textarea id="text-payload" rows="5" placeholder="Replacement text for the selected text control"></textarea>
+          </label>
+          <button id="apply-text">Apply Text To Selected</button>
+          <label class="field top-gap">
+            <span>OOXML Fragment</span>
+            <textarea id="ooxml-payload" rows="7" placeholder="Paste a WordprocessingML fragment"></textarea>
+          </label>
+          <button id="replace-fragment">Replace Selected Fragment</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Session State</h2>
+          <span id="session-chip" class="chip">No session</span>
+        </div>
+        <pre id="session-json" class="json-block">{}</pre>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Regions</h2>
+          <span id="region-count" class="chip">0</span>
+        </div>
+        <div id="regions-list" class="regions-list"></div>
+      </section>
+
+      <footer id="status" class="status">Waiting for Office...</footer>
+    </main>
+    <script src="./taskpane.js"></script>
+  </body>
+</html>

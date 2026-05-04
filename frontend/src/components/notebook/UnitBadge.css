@@ -1,0 +1,92 @@
+.unit-badge {
+    position: relative;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.16rem;
+    white-space: nowrap;
+}
+
+.unit-badge__magnitude {
+    font-variant-numeric: tabular-nums;
+    color: inherit;
+}
+
+.unit-badge__unit {
+    color: #7ec8ff;
+    font-style: italic;
+    text-decoration: underline dotted transparent;
+    text-underline-offset: 0.12em;
+    transition: color 120ms ease, text-decoration-color 120ms ease;
+    cursor: help;
+}
+
+.unit-badge:hover .unit-badge__unit {
+    color: #a7dcff;
+    text-decoration-color: currentColor;
+}
+
+.unit-badge--badge {
+    padding: 0.08rem 0.38rem;
+    border-radius: 999px;
+    background: rgba(126, 200, 255, 0.12);
+    border: 1px solid rgba(126, 200, 255, 0.32);
+}
+
+.unit-tooltip {
+    position: fixed;
+    min-width: 220px;
+    max-width: 320px;
+    border-radius: 9px;
+    border: 1px solid #3f5261;
+    background: #1b232b;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+    padding: 10px 12px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+}
+
+.unit-tooltip__category {
+    color: #7ec8ff;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.unit-tooltip__name {
+    color: #e5edf4;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.unit-tooltip__description {
+    color: #c4d0db;
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.unit-tooltip__equivalent {
+    color: #b4c8da;
+    border-top: 1px solid rgba(126, 200, 255, 0.22);
+    margin-top: 4px;
+    padding-top: 5px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+}
+
+.unit-tooltip__dimension {
+    color: #9fc7e7;
+    font-size: 10px;
+    border-top: 1px solid rgba(126, 200, 255, 0.18);
+    margin-top: 3px;
+    padding-top: 4px;
+}
+
+.unit-tooltip__fundamentals {
+    color: #b8d8ef;
+    font-size: 10px;
+    line-height: 1.35;
+}

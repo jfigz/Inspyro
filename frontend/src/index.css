@@ -1,0 +1,658 @@
+/* =====================================================================
+   INSPYRO - Modern Jupyter-Style IDE
+   A professional, responsive interface inspired by JupyterLab
+   ===================================================================== */
+
+/* ==================== CSS CUSTOM PROPERTIES ==================== */
+:root {
+  /* === Color Palette - Elegant Dark Theme === */
+  --color-bg-deep: #0d1117;
+  --color-bg-primary: #161b22;
+  --color-bg-secondary: #1c2128;
+  --color-bg-tertiary: #21262d;
+  --color-bg-elevated: #2d333b;
+  --color-bg-hover: #30363d;
+  --color-bg-active: #388bfd1a;
+
+  /* === Surface Colors === */
+  --color-surface-card: rgba(33, 38, 45, 0.85);
+  --color-surface-overlay: rgba(22, 27, 34, 0.95);
+  --color-surface-glass: rgba(45, 51, 59, 0.7);
+
+  /* === Border Colors === */
+  --color-border-default: #30363d;
+  --color-border-muted: #21262d;
+  --color-border-subtle: rgba(240, 246, 252, 0.1);
+  --color-border-accent: #388bfd;
+
+  /* === Text Colors === */
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #8b949e;
+  --color-text-tertiary: #6e7681;
+  --color-text-muted: #484f58;
+  --color-text-link: #58a6ff;
+
+  /* === Accent Colors === */
+  --color-accent-primary: #58a6ff;
+  --color-accent-secondary: #388bfd;
+  --color-accent-hover: #1f6feb;
+  --color-accent-muted: rgba(56, 139, 253, 0.4);
+
+  /* === Semantic Colors === */
+  --color-success: #3fb950;
+  --color-success-muted: rgba(63, 185, 80, 0.15);
+  --color-success-emphasis: #238636;
+
+  --color-warning: #d29922;
+  --color-warning-muted: rgba(187, 128, 9, 0.15);
+  --color-warning-emphasis: #9e6a03;
+
+  --color-error: #f85149;
+  --color-error-muted: rgba(248, 81, 73, 0.15);
+  --color-error-emphasis: #da3633;
+
+  --color-info: #58a6ff;
+  --color-info-muted: rgba(56, 139, 253, 0.15);
+
+  /* === Code Cell Colors === */
+  --color-cell-code: #238636;
+  --color-cell-markdown: #9e6a03;
+  --color-cell-raw: #6e7681;
+  --color-cell-executing: #d29922;
+
+  /* === Scrollbar === */
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #484f58;
+  --scrollbar-thumb-hover: #6e7681;
+  --scrollbar-size: 16px;
+  --scrollbar-size-firefox: thin;
+  --scrollbar-track-fill: transparent;
+  --scrollbar-thumb-fill: var(--scrollbar-thumb);
+  --scrollbar-thumb-fill-hover: var(--scrollbar-thumb);
+  --scrollbar-thumb-fill-active: var(--scrollbar-thumb);
+  --scrollbar-thumb-border-rest: 5px;
+  --scrollbar-thumb-border-hover: 1px;
+  --scrollbar-thumb-border-active: 1px;
+  --scrollbar-thumb-min-length: 48px;
+
+  /* === Resizer === */
+  --resizer-lane-size: 14px;
+  --resizer-track: rgba(110, 118, 129, 0.18);
+  --resizer-track-hover: rgba(88, 166, 255, 0.45);
+  --resizer-grip: rgba(139, 148, 158, 0.65);
+  --resizer-grip-hover: rgba(88, 166, 255, 0.98);
+  --resizer-grip-length: 64px;
+  --resizer-grip-thickness: 3px;
+  --resizer-grip-thickness-hover: 7px;
+  --split-panel-offset: calc(var(--resizer-lane-size) / 2);
+
+  /* === Typography === */
+  --font-sans: 'Source Sans 3', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Source Code Pro', 'Roboto Mono', 'JetBrains Mono', monospace;
+  --font-display: 'Source Sans 3', 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+  /* === Font Sizes === */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.25rem;
+  --text-3xl: 1.5rem;
+
+  /* === Spacing === */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* === Border Radius === */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+
+  /* === Shadows === */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  --shadow-glow: 0 0 20px rgba(88, 166, 255, 0.15);
+  --shadow-glow-success: 0 0 20px rgba(63, 185, 80, 0.15);
+
+  /* === Transitions === */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: 500ms cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  /* === Z-Index Scale === */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 300;
+  --z-popover: 400;
+  --z-tooltip: 500;
+  --z-toast: 600;
+}
+
+/* ==================== RESET & BASE STYLES ==================== */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  background: var(--color-bg-deep);
+  min-height: 100vh;
+  overflow: hidden;
+
+  /* Subtle gradient background */
+  background-image:
+    radial-gradient(ellipse at top left, rgba(88, 166, 255, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at bottom right, rgba(63, 185, 80, 0.02) 0%, transparent 50%);
+}
+
+#root {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ==================== SHARED SCROLL SURFACES ==================== */
+* {
+  scrollbar-width: var(--scrollbar-size-firefox);
+  scrollbar-color: transparent var(--scrollbar-track-fill);
+}
+
+*:hover,
+*:focus-within {
+  scrollbar-color: var(--scrollbar-thumb-fill) var(--scrollbar-track-fill);
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track-fill);
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-full);
+  background-color: transparent;
+  border: var(--scrollbar-thumb-border-rest) solid transparent;
+  background-clip: padding-box;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-fill);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-fill-hover);
+  border-width: var(--scrollbar-thumb-border-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-fill-active);
+  border-width: var(--scrollbar-thumb-border-active);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scroll-surface {
+  position: relative;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scroll-surface[data-scrollbar-dragging] {
+  scroll-behavior: auto !important;
+}
+
+.scroll-surface::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scroll-surface__overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  z-index: 40;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.scroll-surface__overlay[data-visible='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.scroll-surface__overlay[data-visible='false'] {
+  pointer-events: none;
+}
+
+.scroll-surface__thumb {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  border-radius: var(--radius-full);
+  background-color: var(--scrollbar-thumb-fill);
+  transition:
+    width var(--transition-fast),
+    height var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.scroll-surface__overlay--vertical .scroll-surface__thumb {
+  top: 0;
+  left: 50%;
+  width: calc(var(--scrollbar-size) - (var(--scrollbar-thumb-border-rest) * 2));
+  height: var(--scroll-thumb-height, 48px);
+  transform: translateX(-50%) translateY(var(--scroll-thumb-top, 0px));
+}
+
+.scroll-surface__overlay--horizontal .scroll-surface__thumb {
+  top: 50%;
+  left: 0;
+  width: var(--scroll-thumb-width, 48px);
+  height: calc(var(--scrollbar-size) - (var(--scrollbar-thumb-border-rest) * 2));
+  transform: translateX(var(--scroll-thumb-left, 0px)) translateY(-50%);
+}
+
+.scroll-surface__overlay--vertical:hover .scroll-surface__thumb,
+.scroll-surface__overlay--vertical .scroll-surface__thumb:hover,
+.scroll-surface__overlay--vertical .scroll-surface__thumb.is-dragging {
+  width: calc(var(--scrollbar-size) - (var(--scrollbar-thumb-border-hover) * 2));
+  background-color: var(--scrollbar-thumb-fill-hover);
+}
+
+.scroll-surface__overlay--horizontal:hover .scroll-surface__thumb,
+.scroll-surface__overlay--horizontal .scroll-surface__thumb:hover,
+.scroll-surface__overlay--horizontal .scroll-surface__thumb.is-dragging {
+  height: calc(var(--scrollbar-size) - (var(--scrollbar-thumb-border-hover) * 2));
+  background-color: var(--scrollbar-thumb-fill-hover);
+}
+
+.scroll-surface__thumb.is-dragging {
+  background-color: var(--scrollbar-thumb-fill-active);
+  cursor: grabbing;
+}
+
+.scroll-surface__thumb.is-dragging {
+  transition: none;
+}
+
+body.scroll-surface-thumb-dragging,
+body.scroll-surface-thumb-dragging * {
+  user-select: none;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar {
+  opacity: 0 !important;
+  transition: opacity var(--transition-fast) !important;
+}
+
+.monaco-scroll-shell:hover .monaco-scrollable-element > .scrollbar,
+.monaco-scroll-shell:focus-within .monaco-scrollable-element > .scrollbar,
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar:hover,
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar:active {
+  opacity: 1 !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar.vertical,
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar.horizontal {
+  background: transparent !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar.vertical {
+  width: var(--scrollbar-size) !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar.horizontal {
+  height: var(--scrollbar-size) !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar > .slider {
+  border-radius: var(--radius-full) !important;
+  background: var(--scrollbar-thumb-fill) !important;
+  border: var(--scrollbar-thumb-border-rest) solid transparent !important;
+  background-clip: padding-box !important;
+  transition:
+    border-width var(--transition-fast),
+    background-color var(--transition-fast) !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar:hover > .slider,
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--scrollbar-thumb-fill-hover) !important;
+  border-width: var(--scrollbar-thumb-border-hover) !important;
+}
+
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar > .slider.active,
+.monaco-scroll-shell .monaco-scrollable-element > .scrollbar > .slider:active {
+  background: var(--scrollbar-thumb-fill-active) !important;
+  border-width: var(--scrollbar-thumb-border-active) !important;
+}
+
+/* ==================== SELECTION ==================== */
+::selection {
+  background: var(--color-accent-muted);
+  color: var(--color-text-primary);
+}
+
+/* ==================== FOCUS STYLES ==================== */
+:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 2px;
+}
+
+/* ==================== LINKS ==================== */
+a {
+  color: var(--color-text-link);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-accent-primary);
+  text-decoration: underline;
+}
+
+/* ==================== BUTTONS BASE ==================== */
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  transition: all var(--transition-base);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ==================== INPUTS BASE ==================== */
+input,
+select,
+textarea {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  transition: all var(--transition-base);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 3px var(--color-accent-muted);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* ==================== CODE ELEMENTS ==================== */
+code,
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+pre {
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  overflow-x: auto;
+}
+
+code {
+  background: var(--color-bg-elevated);
+  padding: 0.125em 0.375em;
+  border-radius: var(--radius-sm);
+  color: var(--color-accent-primary);
+}
+
+/* ==================== UTILITY CLASSES ==================== */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glass {
+  background: var(--color-surface-glass);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+}
+
+/* ==================== ANIMATIONS ==================== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 5px var(--color-accent-muted);
+  }
+
+  50% {
+    box-shadow: 0 0 20px var(--color-accent-muted), 0 0 30px var(--color-accent-muted);
+  }
+}
+
+@keyframes borderPulse {
+
+  0%,
+  100% {
+    border-color: var(--color-cell-executing);
+  }
+
+  50% {
+    border-color: var(--color-warning);
+  }
+}
+
+/* ==================== ANIMATION UTILITIES ==================== */
+.animate-fade-in {
+  animation: fadeIn var(--transition-slow) ease-out;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp var(--transition-slow) ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight var(--transition-slow) ease-out;
+}
+
+.animate-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ==================== RESPONSIVE TYPOGRAPHY ==================== */
+@media (max-width: 768px) {
+  :root {
+    --text-xs: 0.6875rem;
+    --text-sm: 0.75rem;
+    --text-base: 0.8125rem;
+    --text-lg: 0.875rem;
+    --text-xl: 1rem;
+    --text-2xl: 1.125rem;
+    --text-3xl: 1.25rem;
+  }
+}
+
+/* ==================== HIGH CONTRAST MODE ==================== */
+@media (prefers-contrast: high) {
+  :root {
+    --color-border-default: #6e7681;
+    --color-text-secondary: #b1bac4;
+    --color-text-tertiary: #8b949e;
+  }
+}
+
+/* ==================== REDUCED MOTION ==================== */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ==================== PRINT STYLES ==================== */
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

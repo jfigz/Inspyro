@@ -1,0 +1,1233 @@
+﻿meta:
+
+  version: "1.0"
+
+  updated_at: "2026-05-03"
+
+  language: "es"
+
+  audience: "LLM-first"
+
+  source_priority:
+
+    - "docs/llm-index.yaml"
+
+    - "docs/architecture/contracts-catalog.md"
+
+    - "docs/architecture/feature-threads.md"
+
+    - "docs/modules/*.md"
+
+read_paths:
+
+  global_understanding:
+
+    - "docs/llm-index.yaml"
+
+    - "docs/architecture/system-context.md"
+
+    - "docs/architecture/feature-threads.md"
+
+  backend_change:
+
+    - "docs/llm-index.yaml"
+
+    - "docs/architecture/contracts-catalog.md"
+
+    - "docs/modules/04-notebook-handlers.md"
+
+    - "docs/modules/09-jupyter-kernel.md"
+
+  frontend_change:
+
+    - "docs/llm-index.yaml"
+
+    - "docs/architecture/frontend-flow.md"
+
+    - "docs/modules/14-main-app.md"
+
+    - "docs/modules/11-notebook-editor-ui.md"
+
+  ws_contract_change:
+
+    - "docs/architecture/contracts-catalog.md"
+
+    - "docs/architecture/synergy-matrix.md"
+
+    - "docs/modules/04-notebook-handlers.md"
+
+    - "docs/modules/14-main-app.md"
+
+  agent_onboarding:
+
+    - "docs/agents/quickstart.md"
+
+    - "docs/agents/task-routing.yaml"
+
+    - "docs/llm-index.yaml"
+
+    - "AGENTS.md"
+
+deep_dives:
+
+  docx:
+
+    canonical_doc: "docs/modules/01-document-generation-docx.md"
+
+    extended_reference: "LLM_GUIDE_DOCX.md"
+
+modules:
+
+  - id: "01"
+
+    name: "document-generation-docx"
+
+    doc: "docs/modules/01-document-generation-docx.md"
+
+    source_files: [
+
+      "backend/librerias_propias/docx_builder/",
+
+      "backend/app/services/docx_artifacts.py",
+
+      "backend/app/services/docx_downloads.py",
+
+      "backend/app/services/docx_render_cache.py",
+
+      "backend/app/services/docx_core/",
+
+      "backend/app/services/docx_quality/",
+
+      "backend/app/routers/docx.py",
+
+      "backend/app/services/pdf_converter.py",
+
+      "tools/repair_docx_provenance.py"
+
+    ]
+
+    upstream: ["04", "17"]
+
+    downstream: ["04", "09", "14"]
+
+    contracts_in: ["notebook_execute_cell", "force_reconvert_pdf", "template_preview_style"]
+
+    contracts_out: ["notebook_cell_executed", "notebook_docx_update", "notebook_pdf_ready", "pdf_reconverted"]
+
+    state_owner: "docx session relationship-aware + dual math pipeline (`math_latex()` recomendado via latex2mathml vendorizado + MathML -> OMML, `math()` legacy intacto) + normalización MathML previa al XSL para delimitadores extensibles en matrices/cases y fences `\\left...\\right` soportados (`() [] {} | ‖ ⟨⟩`) con emparejamiento anidado y contenido agrupado como único operando OMML + reparación OMML post-transform para operandos vacíos de n-arios (`\\sum`/`\\prod`/`\\int`) dentro de fences complejos, evitando placeholders en Word + template table runtime defaults + builder_required_style_defaults/font metadata reutilizados desde template.json + fallback seguro de estilos paragraph requeridos + counters/bookmarks de captions `SEQ` para Figura/Tabla + repair export-time de `headerReference/footerReference` desde template cuando notebooks pierden `sectPr` estructurales + provenance per-fragment con destinos `callsite + exact`, `user_stack`, filtros para no promocionar `ipykernel_*` como `callsite` util y hyperlinks estables `/api/docx/provenance/open` construidos contra el backend runtime + split explícito raw vs delivery (`export_docx_base64()`/`serialize_docx_bytes()` internos para PDF-reconvert y `doc_export(...)` delivery saneado) + handoff notebook->backend file-backed por ejecución con fallback legacy stdout + sanitización de entrega sobre OOXML completo para que todo DOCX Word-visible elimine hyperlinks automáticos y field codes `HYPERLINK` de procedencia mientras el artifact interno conserva la copia link-first para PDF/reconversión + `builder.document` proxy rastreado para `python-docx`/OOXML y `builder.document_raw` como escape hatch + persistent DOCX artifact store/history/manifests (30 dias) + metadata de copia persistida `workspace_path/workspace_relpath/workspace_warning/workspace_root` resuelta primero desde `source_path` + dedupe visible por `execution_id + binary_hash` en `Docx_Documents` + clasificacion `docx_is_empty`/`docx_warning` + latest non-empty lookup + pdf cache + cola async explícita del convertidor PDF Word-capable con executors dedicados y `pdf_queue_wait_ms` para que notebooks paralelos no bloqueen el pool compartido mientras esperan turno del recurso externo + cache visual persistente `docx_render_cache.py` por `binary_hash + renderer_signature + profile`, PDF canónico y PNGs PyMuPDF por página/zoom con manifiesto, resource handles y limpieza de derivados + entrega WS notebook-first link-first aun para artefactos pequeños cuando ya existe `docx_ref` / `pdf_ref` estable, reduciendo contención entre notebooks paralelos sobre el mismo websocket + `docx_core` OOXML compartido para Workbench + auditoría por perfiles/operaciones Workbench con summaries/resources/variantes inmutables + builder helpers de entrega (`alt_text`, header rows repetibles, anchos/padding/alineación, `doc_finalize(profile)`) + utilidad `tools/repair_docx_provenance.py` para limpiar DOCX ya descargados con el mismo sanitizer productivo"
+
+  - id: "02"
+
+    name: "websocket-manager"
+
+    doc: "docs/modules/02-websocket-manager.md"
+
+    source_files: ["backend/app/services/websocket_manager.py", "backend/main.py", "backend/app/contracts/ws_models.py"]
+
+    upstream: ["main"]
+
+    downstream: ["04", "analysis", "lsp"]
+
+    contracts_in: []
+
+    contracts_out: ["all_ws_outbound"]
+
+    state_owner: "active websocket connections + per-connection outgoing FIFO queues/writer tasks + managers separados para `/ws` shell-global y `/ws/notebook` notebook-scoped + política `Protect notebooks` que recicla conexiones saturadas (`1013/outgoing_queue_saturated`) antes de bloquear productores notebook/docx"
+
+  - id: "03"
+
+    name: "file-system-api"
+
+    doc: "docs/modules/03-file-system-api.md"
+
+    source_files: ["backend/app/routers/files.py", "backend/app/services/file_watcher.py"]
+
+    upstream: ["14"]
+
+    downstream: ["14", "11"]
+
+    contracts_in: ["GET /api/files/tree", "GET /api/files/search", "GET /api/files/read", "POST /api/files/write", "POST /api/files/create", "DELETE /api/files/delete", "POST /api/files/rename", "POST /api/files/move", "POST /api/files/copy", "POST /api/files/duplicate", "POST /api/files/open-default"]
+
+    contracts_out: ["http_json_responses", "workspace_fs_event"]
+
+    state_owner: "filesystem workspace + watcher batch por workspace activo + metadata lazy de explorer + apertura explícita de archivos seguros con la aplicación por defecto del sistema operativo para modo web local"
+
+  - id: "04"
+
+    name: "notebook-handlers"
+
+    doc: "docs/modules/04-notebook-handlers.md"
+
+    source_files: [
+
+      "backend/app/routers/notebook.py",
+
+      "backend/app/routers/notebook_common.py",
+
+      "backend/app/routers/notebook_execution.py",
+
+      "backend/app/routers/notebook_kernel_control.py",
+
+      "backend/app/routers/notebook_template.py",
+
+      "backend/app/services/notebook_service.py",
+
+      "backend/scripts/stress_ws_mix.py"
+
+    ]
+
+    upstream: ["09", "01", "17", "02"]
+
+    downstream: ["11", "14", "17"]
+
+    contracts_in: ["notebook_*", "notebook_cancel_execution", "notebook_attach_kernel", "execute_code", "cancel_code_execution", "reconvert_pdf", "force_reconvert_pdf", "template_*", "template_preview_cancel", "clear_mdoc"]
+
+    contracts_out: ["notebook_*", "notebook_execution_cancelled", "template_*", "template_preview_cancelled", "execution_*", "pdf_reconverted"]
+
+    state_owner: "kernel orchestration + notebook runtime state + preservación/migración suave de `cell_type=docx` como tipo nativo Inspyro en `.ipynb` + snapshots notebook por `kernel_id` para reattach (`notebook_attach_kernel`) + mapping reconnect-safe `kernel_id -> websocket` con rebind en requests notebook/template/control válidas y cleanup diferido cancelable del socket previo + provenance DOCX por kernel (`kernel_id -> source_path/source_kind`) + ownership DOCX por `notebook_cell_id` para cleanup de bloques stale + instrumentación compile/exec con filename sintético `<inspyro-notebook:{cell_id}>` para líneas exactas de procedencia + `notebook_loaded` rellena `cells[].id`/`metadata.inspyro_id` cuando el payload legacy carece de ids + heartbeat WS por `execution_id` para celdas largas sin terminal inmediato + metadata de ruteo temprana (`kernel_id`/`source_path`/`source_kind`) en forward IOPub y keepalive de progreso + evidencia compacta de recovery post-disconnect por `execution_id` (terminal observado o artefacto exacto) + progreso WS estructurado por scope/stage para separar corrida de celdas del pipeline DOCX/PDF tardío + `notebook_progress_update.shared_resource` aditivo para recursos serializados reales (`pdf_converter` global `waiting|running`) + exportación documental final siempre diferida después del terminal + coordinador documental latest-wins por `kernel_id` con ventana corta de estabilización + cola explícita del convertidor PDF notebook-first mediante `build_pdf_context_async()` para sacar la espera de Word del executor compartido + runtime registry notebook/code visible en Home + `home_compact_store` mantiene `progress/shared_resource` hasta terminales documentales reales, no hasta `notebook_docx_update` intermedio + handoff DOCX/provenance file-backed por ejecución con fallback stdout + timings documentales extendidos (`kernel_export_ms`, `transport_read_ms`, `workspace_write_ms`, `pdf_queue_wait_ms`, etc.) + la ejecución terminal ya no depende de `capture_docx`/`__INSP_NOTEBOOK_DOCX` en el reply"
+
+  - id: "05"
+
+    name: "code-execution"
+
+    doc: "docs/modules/05-code-execution.md"
+
+    source_files: ["backend/app/routers/notebook_execution.py"]
+
+    upstream: ["14"]
+
+    downstream: ["14"]
+
+    contracts_in: ["execute_code", "cancel_code_execution"]
+
+    contracts_out: ["execution_started", "execution_result", "execution_error"]
+
+    state_owner: "jobs `.py` aislados por `run_id + file_path` + un runtime activo por archivo via `_code_run_by_path` + concurrencia entre archivos distintos + cancelación explícita por `run_id`/`file_path` + reflejo de runtimes vivos en `home_compact_store` (`code_runtime_items`, `runtime_items`) sin intérprete persistente entre corridas"
+
+  - id: "06"
+
+    name: "dependency-analyzer"
+
+    doc: "docs/modules/06-dependency-analyzer.md"
+
+    source_files: ["backend/app/services/dependency_analyzer.py", "backend/app/services/dependency_service.py"]
+
+    upstream: ["11", "12", "04"]
+
+    downstream: ["12"]
+
+    contracts_in: ["analyze_dependencies", "analyze_impact", "optimize_design", "analyze_load_envelope", "run_code_checks", "compare_scenarios"]
+
+    contracts_out: ["dependency_analysis_result", "impact_analysis_result", "optimization_progress", "optimization_result", "optimization_error", "load_envelope_result", "load_envelope_error", "code_checks_result", "code_checks_error", "scenario_comparison_result", "scenario_comparison_error"]
+
+    state_owner: "analysis graph state + AST/module visitor cache para imports locales del workspace + indice conservador de consumidores `.py` en `analyze_impact` con metadata `workspace_scanned_files/workspace_reverse_index_used/workspace_scan_truncated` + resolucion segura de star imports/reexports `__init__.py` + puentes interprocedurales conservadores callsite->parameter/constructor/self.attr/metodo cuando la resolucion estatica es inequivoca y sin fallback por sufijo dotted ambiguo"
+
+  - id: "07"
+
+    name: "sensitivity-analyzer"
+
+    doc: "docs/modules/07-sensitivity-analyzer.md"
+
+    source_files: ["backend/app/services/sensitivity_service.py", "backend/app/routers/analysis.py"]
+
+    upstream: ["12"]
+
+    downstream: ["12"]
+
+    contracts_in: ["sensitivity_analyze"]
+
+    contracts_out: ["sensitivity_result"]
+
+    state_owner: "computed sensitivity results"
+
+  - id: "08"
+
+    name: "lsp-bridge"
+
+    doc: "docs/modules/08-lsp-bridge.md"
+
+    source_files: ["backend/app/routers/lsp.py", "backend/app/services/lsp_bridge.py"]
+
+    upstream: ["13"]
+
+    downstream: ["13"]
+
+    contracts_in: ["ws_lsp_json_rpc"]
+
+    contracts_out: ["ws_lsp_json_rpc"]
+
+    state_owner: "lsp process bridge"
+
+  - id: "09"
+
+    name: "jupyter-kernel"
+
+    doc: "docs/modules/09-jupyter-kernel.md"
+
+    source_files: ["backend/app/services/jupyter_kernel.py"]
+
+    upstream: ["04", "06"]
+
+    downstream: ["04", "06", "07", "17"]
+
+    contracts_in: ["kernel_execution_calls"]
+
+    contracts_out: ["iopub_outputs", "execution_results"]
+
+    state_owner: "kernel sessions + bounded iopub callback backlog + degradación IOPub graceful (`Empty` benigno, `idle_missing`/`iopub_error` solo cuando corresponde) + dependencia explícita del transporte WS serializado de `02` para que callbacks IOPub y pipeline DOCX/PDF no compitan por `send_text()` en paralelo"
+
+  - id: "11"
+
+    name: "notebook-editor-ui"
+
+    doc: "docs/modules/11-notebook-editor-ui.md"
+
+    source_files: ["frontend/src/components/NotebookEditor.js", "frontend/src/components/notebook/NotebookCell.js", "frontend/src/components/notebook/MarkdownRenderer.js", "frontend/src/components/OutputRenderer.js", "frontend/src/components/NotebookEditor.css"]
+
+    upstream: ["14", "04"]
+
+    downstream: ["12", "17"]
+
+    contracts_in: ["notebook_*", "notebook_attached", "dependency_analysis_result", "impact_analysis_result"]
+
+    contracts_out: ["notebook_execute_cell", "notebook_cancel_execution", "notebook_shutdown_kernel", "analyze_dependencies", "analyze_impact"]
+
+    state_owner: "notebook state visible en browser + superficie activa del notebook + helpers centralizados para `code|markdown|docx`, activador visual `code <-> docx`, renderer Markdown enriquecido frontend-local (`marked` + `marked-katex-extension` + `marked-footnote` + `mermaid`) con `HTML/JS confiable` como gate explícito de scripts, bloqueo de celdas DOCX cuando DOCX/PDF está OFF y omisión en Run All sin emitir `notebook_mdoc_clear` + consumo de mensajes notebook ya ruteados por `App.js` mediante `consumeRemoteNotebookMessage()` + metadata DOCX por notebook/archivo para descargas e historial + propagación de `docx_provenance_available`/`docx_provenance_ref` hacia el shell incluso desde `notebook_pdf_ready` tardío + hidratación runtime clasificada por origen (`runtime` vs `persistable`) y por token explícito de rehidratación para evitar DIRTY falso o remounts por cada stream + `initialKernelId` tratado como runtime vivo, `lastMessage` degradado a fallback shell-compatible y reuso de sesión local sin shutdown automático al navegar + `notebook_attach_kernel` reservado a recovery explícito/reconexión en vez de navegación normal + fallback ids estables via `metadata.inspyro_id` cuando faltan `cell.id` + watchdog local por `execution_id` alineado a `execution_timeout_s=600` con gracia corta para no cancelar `Run All` si llegan keepalives pre-terminal o si el rescate documental llega tarde + rail superior secuencial (verde ejecución / rojo documento) sin solape + fase verde cerrada exclusivamente por `notebook_cell_executed` + copy documental explícito derivado de `shared_resource` (`Esperando/Usando convertidor PDF compartido`) en vez de texto libre + fallback de navegación notebook best-effort por línea cuando el `cellId` persistido por procedencia ya no existe"
+
+    ui_mode: "result-first: markdown narrativo visible con GFM amplio, KaTeX, footnotes, task lists y Mermaid; celdas `code|docx` colapsadas por defecto; split inicial de notebook mas ancho que el editor de codigo; gutters/padding compactos para maximizar resultados; Monaco bajo accion explicita o navegacion a linea; outputs como superficie de resultado con MIME bundles ricos, placeholders seguros para widgets/JS salvo `HTML/JS confiable`, y reemplazo live por `display_id`"
+
+  - id: "12"
+
+    name: "dependency-graph-ui"
+
+    doc: "docs/modules/12-dependency-graph-ui.md"
+
+    source_files: ["frontend/src/components/DependencyGraph.js", "frontend/src/components/VisualizationPanel.js", "frontend/src/components/MonacoEditorLSP.js", "frontend/src/components/dependencyTargetResolver.js", "frontend/src/components/dependencyGraphOverview.js", "frontend/src/components/dependency-graph/"]
+
+    upstream: ["06", "07", "11", "13", "14"]
+
+    downstream: ["11", "14"]
+
+    contracts_in: ["dependency_analysis_result", "impact_analysis_result", "sensitivity_result"]
+
+    contracts_out: ["sensitivity_analyze"]
+
+    state_owner: "graph visualization state + correlación por request_id + navegación notebook/archivo + target resolver compartido para selección explícita y keywords Python (`def`/`class`/`async`) + entrada manual de símbolo desde `VisualizationPanel` + layout horizontal LR + sizing semántico por contenido + complejidad compartida `graphComplexity` para activar large graph por nodos/aristas/densidad + resumen agregado `dependencyGraphOverview` por target/scope/archivo + chips visibles `Resumen/Todo/Camino/Vecinos` con root auto-seleccionado en grafos densos, apertura inicial en `Resumen`, root resaltado por vecindario inmediato en `Todo` y atenuación fuerte de aristas no enfocadas + fullscreen exploratorio con body scroll lock y rail/inspector internos + diagnóstico parcial como banner accionable con aumento de profundidad + búsqueda como foco por defecto y filtro explícito de resultados + inspector por secciones sin UUID de celda como etiqueta primaria + ruteo ortogonal local (`lane_id`/`shared_trunk_id`) sin bundling curvo activo"
+
+  - id: "13"
+
+    name: "monaco-editor"
+
+    doc: "docs/modules/13-monaco-editor.md"
+
+    source_files: ["frontend/src/components/MonacoEditorLSP.js"]
+
+    upstream: ["08"]
+
+    downstream: ["11", "14"]
+
+    contracts_in: ["ws_lsp_json_rpc"]
+
+    contracts_out: ["ws_lsp_json_rpc"]
+
+    state_owner: "editor model state"
+
+  - id: "14"
+
+    name: "main-app"
+
+    doc: "docs/modules/14-main-app.md"
+
+    source_files: [
+
+      "frontend/src/App.js",
+
+      "frontend/src/App.css",
+
+      "frontend/src/components/AgentWorkspaceHome.js",
+
+      "frontend/src/components/AgentWorkspaceHome.css",
+
+      "frontend/src/components/DesktopTitleBar.js",
+
+      "frontend/src/components/DesktopTitleBar.css",
+
+      "frontend/src/components/DocxViewer.js",
+
+      "frontend/src/components/Icons.js",
+
+      "frontend/src/components/Resizer.js",
+
+      "frontend/src/components/Resizer.css",
+
+      "frontend/src/components/PdfViewer.js",
+
+      "frontend/src/components/FileExplorer.js",
+
+      "frontend/src/components/FileTabs.js",
+
+      "frontend/src/components/ExplorerIcons.js",
+
+      "frontend/src/components/FolderSelector.js",
+
+      "frontend/src/components/McpPanel.js",
+
+      "frontend/src/components/McpStatusButton.js",
+
+      "frontend/src/utils/docxArtifacts.js",
+
+      "frontend/src/index.js",
+
+      "frontend/src/boot/RendererRoot.js",
+
+      "frontend/src/boot/rendererDesktopBridge.js",
+
+      "frontend/src/hooks/useAppWebSocket.js",
+
+      "frontend/src/hooks/useFileSystem.js",
+
+      "frontend/src/hooks/useMcpActivity.js",
+
+      "frontend/src/hooks/useMcpShellControls.js",
+
+      "frontend/src/hooks/useMcpMirror.js",
+
+      "frontend/src/hooks/useWebSocket.js",
+
+      "frontend/src/hooks/useTemplateMessageHandler.js",
+
+      "frontend/src/contracts/wsMessageTypes.generated.js",
+
+      "frontend/scripts/generate_ws_types.mjs",
+
+      "frontend/public/favicon.png",
+      "frontend/public/brand/inspyro-mark-128.png",
+      "frontend/public/brand/inspyro-mark-light-128.png",
+
+      "frontend/src/assets/brand/inspyro-mark.png",
+      "frontend/src/assets/brand/inspyro-mark-light.png",
+
+      "assets/brand/",
+
+      "tools/brand/generate_assets.py",
+
+      "frontend/src/data/exampleWorkspaceSeed.js"
+
+    ]
+
+    upstream: ["03", "04", "11", "15", "17", "19"]
+
+    downstream: ["11", "13", "15", "17"]
+
+    contracts_in: ["template_*", "notebook_*", "notebook_attached", "execution_started", "execution_result", "execution_error", "pdf_reconverted", "mcp_activity_event", "mcp_mirror_event", "workspace_fs_event"]
+
+    contracts_out: ["notebook_create", "notebook_load", "notebook_attach_kernel", "execute_code", "cancel_code_execution", "clear_mdoc", "force_reconvert_pdf", "template_upload", "template_attach", "template_update_document_defaults", "template_update_semantic_slots"]
+
+    state_owner: "global app shell state + layout resizers compartidos (`Resizer`) con preview imperativo DOM durante drag de mouse, commit React en `onResizeEnd`, teclado inmediato y clase temporal `app-shell-layout-resizing` para evitar transiciones/pointer-events pesados sin cambiar estética + desktop-aware title bar/menu bridge + branding visible del shell (brand mark PNG claro + wordmark + misión productiva) + launcher agent-first English-first con rutas `Start with Agent` / `Start from example` / `Open project` + seed reproducible del demo open source dentro de un workspace nuevo + App como owner canónico de `documentState/documentActions`, `homeSummary`, sesiones notebook por `path` (`kernelState/runtimeNotebook/runtimeVersion/editorHydrationToken/batchRunState/documentState`), estado `.py` por archivo (`run_id/output/documentState`) y de la cola visible de notificaciones (`id/title/message/type/progress/actions/target`) + resolución shell-owned de targets de notificación hacia `home`, `file`, notebook/celda, `docx`, template o `Agents` + home como centro operativo workspace-scoped hidratada por `GET /api/system/home-summary` y transformada a `workspaceData.operational` (`attentionItems`, carriles `Entender`/`Ejecutar`/`Entregar`, `quickActions`) con `cards` solo como fallback temporal + filtro de recursos internos/generados (`_agent_runs`, `.inspyro`, `Docx_Documents`, demos/smoke) y DOCX vacíos antes de alimentar CTAs principales + runtime persistente por tab/path aunque el editor activo se desmonte + aplicación shell-owned de mensajes `notebook_*` y continuación batch de `Run All` en background + ruteo notebook determinista `payload source_path/notebook_path/path -> entry.path del socket /ws/notebook -> execution_id -> kernel_id` para sesiones ocultas o payloads tempranos todavía sin path explícito + relay explícito de mensajes notebook visibles hacia `NotebookEditor.consumeRemoteNotebookMessage()` para que el editor no compita con un segundo resolvedor + cursores separados para la cola WS global y la cola notebook dedicada, evitando saltos de mensajes al alternar fuente + retención `notebookMessageQueue` por bucket `socket/path` para que una ráfaga de una libreta no evicte terminales de otra + reutilización local de la sesión notebook en navegación normal, dejando `notebook_attach_kernel` para recovery explícito/reconexión + polling/refetch solo mientras `workspaceSurface==='home'` y sin depender de `templateInfo`/`docxHistoryEntries`/mount de `NotebookEditor` + DOCX/PDF latest-wins/history arbitration + filtro de entradas `docx_is_empty` en el CTA principal + apertura DOCX desde Home priorizando `window.inspyroDesktop.openPath(workspace_path)`, luego descarga HTTP por `artifact_id`/token/source y finalmente origen explícito + `Ir a archivos` siempre cambia a `workspaceSurface='file'` aunque no existan tabs abiertas + recuperación tardía de `docx_artifact_id`/`docx_provenance_*`/`source_path`/`workspace_*` cuando `notebook_pdf_ready` llega antes o sin `notebook_docx_update` + visor PDF controlado (`pdfjs-dist`) con `Modo origen`, rail derecho de procedencia `callsite + exact`, metadata client-side (`numPages`/`outline`/`currentPage`) y bookmarks exactos (`destinationKey`/`anchorTopRatio`), navegación interna por destinos PDF, render windowed/lazy y montaje visible-only del `PdfViewer` cuando `Documento` está realmente a la vista + toolbar local compacta de `DocxViewer` (`requestedPage`/`requestedLocation`/`zoomPercent`/`fitMode`) con acciones primarias visibles, iconografía SVG discreta y menús secundarios para historial/vista/limpieza + apertura desktop del DOCX persistido mediante `window.inspyroDesktop.openPath(path)` + reatach de template persistido desde home mediante `POST /api/templates/tokenize` y consumo one-shot de `templateOpenRequest` para evitar replays al remount + estado `Cargando plantilla...` durante reattach para evitar falso vacío + canonicalización de hyperlinks de procedencia stale al `API_BASE` activo + derivación de `provenance_id` desde el URL cuando el overlay no lo trae + estado contextual del convertidor PDF en `DocxViewer` con revalidación al volver a mostrar `Documento` o al reintentar PDF + `documentPipelineStatus` notebook-scoped persistente también en `home` y badges Home derivados de `progress + shared_resource` (`PDF en cola` / `PDF compartido`) para notebooks ocultos + hidratación de notebookData solo cuando `notebookSyncState.path` coincide con la sesión activa y snapshots runtime abiertos desde Home marcados como programáticos, evitando contaminación cruzada y `DIRTY` falso entre tabs + prevención del loop de callbacks entre `DocxViewer` y `PdfViewer` mediante refs estables, swap without blanking y teardown por generación con drenaje de tareas async + `documentPipelineStatus` estructurado hacia `VisualizationPanel`/`DocxViewer` + instrumentación dev del pipeline `manifest -> provenanceCount -> click -> resolver -> navigate` + feed visible `Agents` con `Agent Mirror` opt-in (`default OFF` sin preferencia previa, persistencia en localStorage y auto-ON tras `start/restart` UI) + replay granular gobernado por `mirrorEnabled` + activación de tabs abiertos desde caché + origen explicito de `notebookData` (`runtime` vs `persistable`) + dedupe de warnings por `workspace_fs_event` mientras persista el conflicto + visualization focus requests locales + sync de explorer/tabs ante eventos externos de filesystem + arbitraje de notificaciones internas/nativas + `workspaceSurface` frontend-local (`home`/`file`) con `AgentWorkspaceHome` como home persistente del workspace, archivos/notebooks como herramientas secundarias, loop visible `Entender -> Ejecutar -> Entregar`, franja `Atención`, filtro por cliente MCP hacia `Agents` y `mcp_mirror_event` sin secuestro de foco en `home`"
+
+  - id: "15"
+
+    name: "notification-center"
+
+    doc: "docs/modules/15-notification-center.md"
+
+    source_files: ["frontend/src/components/NotificationCenter.js", "frontend/src/components/StatusBar.js"]
+
+    upstream: ["14", "19"]
+
+    downstream: ["14", "11", "17"]
+
+    contracts_in: ["ui_status_events", "mcp_activity_event"]
+
+    contracts_out: []
+
+    state_owner: "renderer del feed del shell + dropdown expand/collapse + agrupación temporal + medición de truncamiento + expansión inline para mensajes largos + estado de lectura local para notificaciones externas (`externalReadIds`) + affordances visuales alineadas a metadata `target`, mientras la navegación real permanece en `14-main-app`"
+
+  - id: "16"
+
+    name: "ui-automation-guide"
+
+    doc: "docs/modules/16-ui-automation-guide.md"
+
+    source_files: ["docs/modules/16-ui-automation-guide.md"]
+
+    upstream: ["11", "14"]
+
+    downstream: ["agents"]
+
+    contracts_in: []
+
+    contracts_out: []
+
+    state_owner: "n/a"
+
+  - id: "17"
+
+    name: "template-editor"
+
+    doc: "docs/modules/17-template-editor.md"
+
+    source_files: [
+
+      "frontend/src/components/TemplateEditor.js",
+
+      "frontend/src/components/template-editor/TemplateEditorContainer.js",
+
+      "frontend/src/components/template-editor/StyleEditPanel.js",
+
+      "frontend/src/components/template-editor/fontUtils.js",
+
+      "frontend/src/components/template-editor/TableDirectFormatPanel.js",
+
+      "frontend/src/components/template-editor/hooks/useStylePreviewPipeline.js",
+
+      "frontend/src/components/template-editor/hooks/useTablePreviewQueue.js",
+
+      "frontend/src/components/template-editor/templateEditorMappers.js",
+
+      "backend/app/services/template_service.py",
+
+      "backend/app/services/docx_quality/content_controls.py",
+
+      "backend/app/services/template_extract.py",
+
+      "backend/app/services/template/__init__.py",
+
+      "backend/app/services/template/storage.py",
+
+      "backend/app/services/template/mutation.py",
+
+      "backend/app/services/template/preview.py",
+
+      "backend/app/services/template/table_format.py",
+
+      "backend/app/services/template/xml_ops.py",
+
+      "backend/app/services/template_logic.py",
+
+      "backend/app/routers/templates.py",
+
+      "backend/app/routers/notebook_common.py",
+
+      "backend/app/routers/notebook_kernel_control.py",
+
+      "backend/app/routers/notebook_template.py"
+
+    ]
+
+    upstream: ["04", "09", "01"]
+
+    downstream: ["14", "11"]
+
+    contracts_in: ["template_upload", "template_attach", "template_get", "template_delete", "template_update_style", "template_update_document_defaults", "template_update_semantic_slots", "template_preview_style", "template_table_preview", "template_create_style_from_table", "template_apply_table_format"]
+
+    contracts_out: ["template_uploaded", "template_info", "template_deleted", "template_style_updated", "template_document_defaults_updated", "template_semantic_slots_updated", "template_preview_ready", "template_preview_error", "template_table_preview_ready", "template_table_preview_error", "template_style_created", "template_format_applied", "template_error"]
+
+    state_owner: "template metadata + font_catalog/default_font/default_font_source/system_font_catalog/document_defaults + `style_coverage` requerido + `style_browser` navegable (categories/category_order/counts/auto_selected) + `selection_key` estable por estilo + `semantic_style_slots` persistidos como contrato Word-first entre editor/runtime + table_style_runtime_defaults + document_captions detectados desde `document.xml` + builder_required_style_defaults para runtime DOCX + export/import portable por REST (`/api/templates/export` + `/api/templates/upload`) con `semantic_style_slots` y compatibilidad legacy `category_overrides` + garantía de recarga kernel con fallback seguro de estilos paragraph requeridos + preview cache con resets por huella estable de template y mensajes WS deduplicados para evitar loops de render al reattach desde Home + shell source of truth para template reflejado"
+
+  - id: "18"
+
+    name: "engineering-units"
+
+    doc: "docs/modules/18-engineering-units.md"
+
+    source_files: [
+
+      "backend/librerias_propias/inspyro_units/",
+
+      "backend/librerias_propias/inspyro_units/normalization.py",
+
+      "backend/librerias_propias/inspyro_units/engineering.py",
+
+      "backend/app/services/notebook_service.py",
+
+      "backend/app/services/jupyter_kernel.py",
+
+      "backend/app/services/lsp_bridge.py",
+
+      "backend/app/routers/units.py",
+
+      "backend/app/routers/analysis.py",
+
+      "backend/librerias_propias/docx_builder/builder.py",
+
+      "backend/stubs/inspyro_units.pyi",
+
+      "backend/tests/test_units_kernel_integration.py",
+
+      "backend/tests/test_units_lsp_stubs.py",
+
+      "backend/tests/test_units_docx_rendering.py",
+
+      "backend/tests/test_units_serialization.py",
+
+      "backend/tests/test_units_convert_api.py",
+
+      "backend/tests/test_units_normalization.py",
+
+      "backend/tests/test_units_kernel.py",
+
+      "frontend/src/components/notebook/UnitBadge.js",
+
+      "frontend/src/components/notebook/UnitTooltip.js",
+
+      "frontend/src/components/notebook/UnitBadge.css",
+
+      "frontend/src/components/notebook/unitTokens.js",
+
+      "frontend/src/components/notebook/QuantityVariablesPanel.js",
+
+      "frontend/src/components/notebook/QuantityVariablesPanel.css",
+
+      "frontend/src/components/notebook/deriveEngineeringVars.js",
+
+      "frontend/src/components/OutputRenderer.js",
+
+      "frontend/src/components/MonacoEditorLSP.js",
+
+      "frontend/src/components/NotebookEditor.js",
+
+      "frontend/src/components/NotebookEditor.css",
+
+      "frontend/src/components/VisualizationPanel.js",
+
+      "frontend/src/components/dependency-graph/utils.js",
+
+      "frontend/src/components/dependency-graph/Panels.js",
+
+      "frontend/src/components/dependency-graph/D3DependencyGraph.js",
+
+      "frontend/src/components/Icons.js",
+
+      "frontend/src/App.js"
+
+    ]
+
+    upstream: ["pint"]
+
+    downstream: ["04", "09", "11", "13", "01", "12"]
+
+    contracts_in: []
+
+    contracts_out: []
+
+    state_owner: "catálogo canónico de unidades + normalización/aliases + serialización runtime + tokenización/frontend dinámica"
+
+  - id: "19"
+
+    name: "mcp-server"
+
+    doc: "docs/modules/19-mcp-server.md"
+
+    source_files: [
+
+      "backend/mcp_server/activity.py",
+
+      "backend/mcp_server/mirror.py",
+
+      "backend/mcp_server/server.py",
+
+      "backend/mcp_server/bridge.py",
+
+      "backend/mcp_server/runtime.py",
+
+      "backend/mcp_server/session_state.py",
+
+      "backend/mcp_server/config.py",
+
+      "backend/mcp_server/start_mcp.py",
+
+      "backend/app/routers/mcp_manager.py",
+
+      "backend/app/services/mcp_activity.py",
+
+      "backend/app/services/mcp_mirror.py",
+
+      "backend/mcp_server/tools/notebook.py",
+
+      "backend/mcp_server/tools/files.py",
+
+      "backend/mcp_server/tools/documents.py",
+
+      "backend/mcp_server/tools/analysis.py",
+
+      "backend/mcp_server/tools/system.py",
+
+      "backend/mcp_server/tools/templates.py",
+
+      "backend/mcp_server/tools/units.py",
+
+      "backend/mcp_server/resources/inspyro_resources.py",
+
+      "backend/mcp_server/prompts/inspyro_prompts.py"
+
+    ]
+
+    upstream: ["04", "03", "01", "06", "07", "17", "18"]
+
+    downstream: ["external_ai_clients"]
+
+    contracts_in: ["mcp_json_rpc_tools_call", "mcp_json_rpc_resources_read", "mcp_json_rpc_prompts_get"]
+
+    contracts_out: ["mcp_json_rpc_responses", "mcp_activity_event", "mcp_mirror_event"]
+
+    state_owner: "bridge/session_state session-scoped por MCP session_id + waiters por request_id + subscribers por execution_id + registry local de kernels/artefactos/ejecuciones por sesión + soporte notebook-first de `cell_type=docx` en create/sync/list/get/find y `include_docx=false` en execute_cell/execute_all_cells para omitir report cells sin limpiar `mdoc` + aliases `child_execution_id -> execution_id` público en batches + `current_child_execution_id`/`last_output_preview` para polling y cancelación de corridas largas + kernel-load persistable sin outputs para notebooks grandes + observers tardíos que conservan `notebook_docx_update`/`notebook_pdf_ready` después del terminal + relay del progreso estructurado `execution/document` para clientes MCP + registro de artefactos tardíos en sesión aunque el terminal llegue sin DOCX inline + espera explícita del DOCX final antes de cerrar `execute_all_cells` documental + feedback DOCX Workbench opt-in por MCP (`check_document_quality` textual/cacheado o audit run por perfil, `run_document_workbench`, `compare_document_versions`, `manage_document_review`, `prepare_document_delivery`, `get_document_docx(include_quality=true)` solo cache compacto, `export_clean_document_docx` dentro de roots) + captura explícita de `session_id` al inicio de cada tool notebook-first para bridge/locks/background tasks/completions + reporters de actividad/espejo + roots/perfil visibles en contexto MCP"
+
+  - id: "24"
+
+    name: "desktop-shell"
+
+    doc: "docs/modules/24-desktop-shell.md"
+
+    source_files: [
+
+      "desktop/package.json",
+
+      "desktop/main.js",
+
+      "desktop/preload.js",
+
+      "desktop/splash-preload.js",
+
+      "desktop/splash.html",
+
+      "desktop/assets/",
+
+      "desktop/scripts/dev-full.mjs",
+
+      "desktop/scripts/smoke-renderer.cjs",
+
+      "desktop/scripts/smoke-packaged.cjs",
+
+      "desktop/scripts/stage-resources.mjs",
+
+      "backend/main.py",
+
+      "frontend/src/components/DesktopTitleBar.js",
+
+      "frontend/src/components/DesktopTitleBar.css",
+
+      "frontend/public/favicon.png",
+      "frontend/public/brand/inspyro-mark-128.png",
+      "frontend/public/brand/inspyro-mark-light-128.png",
+
+      "frontend/src/assets/brand/inspyro-mark.png",
+      "frontend/src/assets/brand/inspyro-mark-light.png",
+
+      "assets/brand/",
+
+      "tools/brand/generate_assets.py",
+
+      "frontend/src/config/endpoints.js",
+
+      "frontend/public/index.html",
+
+      "frontend/src/index.js"
+
+    ]
+
+    upstream: ["14", "08", "19"]
+
+    downstream: ["14", "03", "04", "08", "19"]
+
+    contracts_in: ["window.inspyroDesktop", "desktop_runtime_env"]
+
+    contracts_out: ["same_origin_desktop_shell", "python_sidecar_process"]
+
+    state_owner: "Electron single-instance/window lifecycle + splash/boot state + shell-state persistido (`windowBounds`, `isMaximized`, `recentWorkspaces`) + preload seguro (`window.inspyroDesktop`) con `openExternal(url)` y `openPath(path)` + backend sidecar child-process + routing IPC menu->renderer y native file/protocol targets encolados hasta `renderer_app_ready` + maquina de estados del arranque renderer (`renderer_bootstrap_ready`/`renderer_app_ready`/`renderer_app_failed`/`renderer_unhandled_error`) + diagnostico visible de fallos + same-origin runtime config + branding visible compartido entre header/splash/favicon/icono runtime Windows desde variantes contextuales de `assets/brand/` + staging limpio de frontend build/backend sin estado local + runtime Python portable sincronizado/verificado con requirements backend+MCP bajo `PYTHONNOUSERSITE=1` + metadata NSIS/asociaciones Windows + smoke empaquetado"
+
+contracts:
+
+  websocket_ws:
+
+    - { name: "notebook_create", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_create", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_load", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_load", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_attach_kernel", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_attach_kernel", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_save", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_save", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_execute_cell", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_execute_cell", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_delete_cell", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_delete_cell", criticality: "high", sync_mode: "direct" }
+
+    - { name: "notebook_move_cell", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_move_cell", criticality: "high", sync_mode: "direct" }
+
+    - { name: "notebook_set_order", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_set_order", criticality: "high", sync_mode: "direct" }
+
+    - { name: "notebook_reset_kernel", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_reset_kernel", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_interrupt_kernel", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_interrupt_kernel", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_shutdown_kernel", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_shutdown_kernel", criticality: "high", sync_mode: "direct" }
+
+    - { name: "notebook_cancel_execution", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_cancel_execution", criticality: "critical", sync_mode: "direct" }
+
+    - { name: "notebook_comm_msg", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_comm_msg", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "notebook_mdoc_clear", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_notebook_mdoc_clear", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "execute_code", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_code_execution", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "cancel_code_execution", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_cancel_code_execution", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "reconvert_pdf", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_reconvert_pdf", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "force_reconvert_pdf", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_force_reconvert_pdf", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "analyze_dependencies", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_analyze_dependencies", criticality: "high", sync_mode: "direct" }
+
+    - { name: "analyze_impact", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_analyze_impact", criticality: "high", sync_mode: "direct" }
+
+    - { name: "sensitivity_analyze", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_sensitivity_analyze", criticality: "high", sync_mode: "direct" }
+
+    - { name: "optimize_design", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_optimize_design", criticality: "high", sync_mode: "direct" }
+
+    - { name: "analyze_load_envelope", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_analyze_load_envelope", criticality: "high", sync_mode: "direct" }
+
+    - { name: "run_code_checks", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_run_code_checks", criticality: "high", sync_mode: "direct" }
+
+    - { name: "compare_scenarios", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_compare_scenarios", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_upload", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_upload", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_attach", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_attach", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_get", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_get", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "template_delete", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_delete", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_update_style", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_update_style", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_update_document_defaults", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_update_document_defaults", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_update_semantic_slots", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_update_semantic_slots", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_preview_cancel", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_preview_cancel", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_preview_style", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_preview_style", criticality: "high", sync_mode: "background" }
+
+    - { name: "template_table_preview", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_table_preview", criticality: "high", sync_mode: "background" }
+
+    - { name: "template_create_style_from_table", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_create_style_from_table", criticality: "high", sync_mode: "direct" }
+
+    - { name: "template_apply_table_format", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "handle_template_apply_table_format", criticality: "high", sync_mode: "direct" }
+
+    - { name: "clear_mdoc", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "dispatcher_inline", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "ping", direction: "C->S", producer: "Frontend", consumer: "Backend", handler: "dispatcher_inline", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "mcp_activity_event", direction: "S->C", producer: "backend/app/routers/mcp_manager.py", consumer: "Frontend", handler: "mcp_activity_events.broadcast", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "mcp_mirror_event", direction: "S->C", producer: "backend/app/routers/mcp_manager.py", consumer: "Frontend", handler: "mcp_mirror_events.broadcast", criticality: "normal", sync_mode: "direct" }
+
+    - { name: "workspace_fs_event", direction: "S->C", producer: "backend/app/services/file_watcher.py", consumer: "Frontend", handler: "workspace_fs_watcher.broadcast", criticality: "high", sync_mode: "direct" }
+
+  websocket_lsp:
+
+    - { name: "json_rpc_lsp", direction: "C<->S", producer: "Monaco", consumer: "pylsp", handler: "lsp_router", criticality: "high", sync_mode: "direct" }
+
+  rest:
+
+    - { name: "GET /health", owner: "backend/main.py", criticality: "high" }
+
+    - { name: "GET /metrics", owner: "backend/main.py", criticality: "normal" }
+
+    - { name: "GET /pdf-status", owner: "backend/main.py", criticality: "high" }
+
+    - { name: "GET /api/system/info", owner: "backend/main.py", criticality: "normal" }
+
+    - { name: "POST /api/system/workspace", owner: "backend/main.py", criticality: "high" }
+
+    - { name: "POST /api/system/workspace/create", owner: "backend/main.py", criticality: "high" }
+
+    - { name: "GET /api/files/tree", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "GET /api/files/search", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "GET /api/files/read", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "POST /api/files/write", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "POST /api/files/create", owner: "backend/app/routers/files.py", criticality: "normal" }
+
+    - { name: "DELETE /api/files/delete", owner: "backend/app/routers/files.py", criticality: "normal" }
+
+    - { name: "POST /api/files/rename", owner: "backend/app/routers/files.py", criticality: "normal" }
+
+    - { name: "POST /api/files/move", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "POST /api/files/copy", owner: "backend/app/routers/files.py", criticality: "high" }
+
+    - { name: "POST /api/files/duplicate", owner: "backend/app/routers/files.py", criticality: "normal" }
+
+    - { name: "POST /api/files/open-default", owner: "backend/app/routers/files.py", criticality: "normal" }
+
+    - { name: "GET /api/mcp/activity", owner: "backend/app/routers/mcp_manager.py", criticality: "normal" }
+
+    - { name: "POST /api/mcp/activity/events", owner: "backend/app/routers/mcp_manager.py", criticality: "normal" }
+
+    - { name: "POST /api/mcp/mirror-events", owner: "backend/app/routers/mcp_manager.py", criticality: "normal" }
+
+    - { name: "GET /api/docx/download", owner: "backend/app/routers/docx.py", criticality: "normal" }
+
+    - { name: "GET /api/docx/history", owner: "backend/app/routers/docx.py", criticality: "normal" }
+
+    - { name: "GET /api/docx/quality", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Resumen cacheado por artifact_id; 404 si no existe" }
+
+    - { name: "POST /api/docx/quality/run", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Auditoria bajo demanda por artifact_id, source_path o kernel_id; persiste quality_summary.json" }
+
+    - { name: "GET /api/docx/quality/render", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Render PNG de pagina via DOCX->PDF nativo + PyMuPDF" }
+
+    - { name: "POST /api/docx/quality/clean", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Genera copia limpia opt-in sin reemplazar el artefacto original" }
+
+    - { name: "POST /api/docx/workbench/run", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Operacion DOCX tipada; persiste summary/resources/variantes sin reemplazar el original" }
+
+    - { name: "GET /api/docx/workbench/result", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Lee summary compacto de una corrida Workbench por artifact_id/workbench_id" }
+
+    - { name: "GET /api/docx/workbench/resource", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Descarga resource generado por Workbench mediante handle validado bajo el store" }
+
+    - { name: "GET /api/docx/render/resource", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Descarga PDF/PNG derivado del cache visual mediante render_id/name validados" }
+
+    - { name: "GET /api/docx/diff", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "Atajo para diff entre dos artifact_id" }
+
+    - { name: "GET /api/docx/provenance", owner: "backend/app/routers/docx.py", criticality: "normal" }
+
+    - { name: "GET /api/docx/provenance/open", owner: "backend/app/routers/docx.py", criticality: "normal", notes: "HTML safe por defecto; `?format=json` devuelve resolución puntual del fragmento para el visor PDF controlado" }
+
+    - { name: "GET /api/pdf/download", owner: "backend/app/routers/pdf.py", criticality: "normal", notes: "Query: inline=1 (preview/iframe), inline=0 (forzar descarga)" }
+
+    - { name: "POST /api/templates/upload", owner: "backend/app/routers/templates.py", criticality: "high" }
+
+    - { name: "GET /api/templates/export", owner: "backend/app/routers/templates.py", criticality: "high" }
+
+    - { name: "POST /api/units/convert", owner: "backend/app/routers/units.py", criticality: "high" }
+
+    - { name: "GET /api/units/catalog", owner: "backend/app/routers/units.py", criticality: "high" }
+
+    - { name: "POST /api/units/compatible", owner: "backend/app/routers/units.py", criticality: "high" }
+
+flows:
+
+  - name: "notebook_execute_and_export"
+
+    modules_involved: ["14", "11", "04", "09", "01"]
+
+    steps:
+
+        - "Frontend envia notebook_execute_cell con execution_id opcional, `cell_type` aditivo (`code|docx`) y presupuesto efectivo `execution_timeout_s=600`; la UI solo mantiene una gracia corta local para el terminal WS"
+
+      - "Frontend conserva una sesion notebook por tab/path; ir a Home, cambiar de tab u abrir otro archivo no cancela el kernel vivo, el shell sigue absorbiendo `notebook_*` aunque el editor se desmonte y la navegación normal reutiliza `initialKernelId` sin mandar attach automático; al rehidratar el notebook activo, `App.js` solo adopta `notebookData` cuyo `notebookSyncState.path` coincide con la sesión visible"
+
+      - "Dispatcher prioriza control (interrupt/reset/shutdown/cancel) y encola trabajo por conexion"
+
+      - "Backend instrumenta y ejecuta en kernel; `INSPYRO_LOCK_TIMEOUT` acota solo la adquisicion del lock por kernel, mientras `execution_timeout_s` (o `INSPYRO_NOTEBOOK_EXECUTION_TIMEOUT=600`) gobierna la ejecucion real; en batch la semantica efectiva es `skip_pdf=true` salvo en la ultima celda ejecutable y el postproceso DOCX/PDF usa `INSPYRO_NOTEBOOK_PDF_TIMEOUT=600`"
+
+      - "Se emiten streams/clear_output/update_display_data/comm_* en tiempo real con callbacks desacoplados, backlog acotado y execution_id aditivo; si `execute_reply` vence, el kernel manager cancela los readers IOPub pendientes para no dejar la sesion degradada, y lecturas benignas `Empty` se tratan como espera del canal en vez de error duro"
+
+      - "La captura runtime evita `repr()` inseguro sobre objetos COM/interop y, si degrada, `notebook_cell_executed` puede incluir `variables_snapshot_degraded` + `execution_diagnostics` sin bloquear el cierre terminal ni esperar rescates documentales inline"
+
+        - "La exportacion DOCX final corre despues del terminal; celdas nuevas de informe se declaran `cell_type=docx`, la deteccion por API DOCX queda como compatibilidad legacy, los adaptadores MCP calculan `emit_docx` una vez para el batch completo cuando corresponde, y la instrumentacion notebook compila el source con filename sintetico `<inspyro-notebook:{cell_id}>` mientras envuelve `build_doc`/`doc_block`/`doc_begin` para propagar `notebook_cell_id`"
+
+        - "DOCX/PDF OFF en UI o `include_docx=false` en MCP omite celdas `docx` para iteracion de calculo; no se envia `notebook_mdoc_clear` ni se invalida el ultimo DOCX/PDF visible"
+
+      - "Cuando la celda usa captions DOCX (`figure`, `image`, `table`, `dataframe`, `caption(number=True)`), `docx_builder` emite campos Word `SEQ` para Figura/Tabla y bookmarks sobre el número efectivo para que `reference(label)` resuelva a la numeración del objeto"
+
+      - "Durante batch (`skip_pdf=true`) las celdas intermedias no persisten artefactos DOCX ni agregan historial; solo la ultima celda exportable puede fijar el DOCX final del lote"
+
+      - "Cada generacion DOCX final persiste un artifacto estable (`artifact_id`) con metadatos de `source_path`/`kernel_id`/`execution_id`; si el binario coincide con uno previo se reutiliza el blob por hash, pero se conserva una entrada historica nueva"
+
+      - "El Workbench DOCX se ejecuta bajo demanda sobre `artifact_id`/`source_path`/`kernel_id`: backend cachea `quality_summary.json` por `artifact_id + binary_hash`, persiste summaries/resources/variantes, puede renderizar paginas PNG con PyMuPDF, gestionar comments/redlines/fields/SDTs/diff y generar copias limpias/publicables sin mutar el DOCX original"
+
+      - "Los handles de recursos Workbench/render son link-first y se validan como segmentos seguros antes de resolver rutas; el backend rechaza IDs traversal o rutas fuera del store/cache antes de leer bytes"
+
+      - "La sesión DOCX captura procedencia por fragmento visible con destinos `callsite + exact`, `user_stack`, persiste un manifiesto por `artifact_id`, rastrea `python-docx`/OOXML via `builder.document` y embebe hyperlinks `/api/docx/provenance/open?provenance_id=...` sobre el contenido visible trazable; toda salida Word-visible (`doc_export`, payload WS, token y `/api/docx/download`) sanea luego esos hyperlinks automáticos y field codes `HYPERLINK`, pero el artifact interno sigue siendo link-first para PDF/reconversión"
+
+      - "Si el DOCX exportado queda sin body util (`word/document.xml` solo con `sectPr`), backend responde `docx_is_empty=true`, agrega warning y no reemplaza el ultimo documento valido ni persiste un artefacto nuevo para esa ejecucion"
+
+      - "docx_builder serializa snapshots con metadata de relaciones OOXML/medios; al rebuild rehidrata `rId`s y valida referencias internas (`a:blip`, `r:id`) antes de persistir o convertir el paquete"
+
+      - "Las celdas largas pueden emitir `notebook_progress_update` pre-terminal (`progress_scope=execution`, `progress_stage=cell_run`, `progress_indeterminate=true`) para refrescar liveness UI sin cambiar el rol terminal de `notebook_cell_executed`"
+
+      - "La UI notebook usa un rail superior secuencial: verde para la corrida de celdas y rojo para el pipeline documental (`queued` -> `docx_export` -> `docx_ready` -> `pdf_convert`) sin solapar ambas fases"
+
+      - "La ultima celda exportable cierra primero con `notebook_cell_executed`, sin pedir `capture_docx` ni `__INSP_NOTEBOOK_DOCX` en el reply terminal, y deja la exportacion DOCX/PDF completamente en background; un coordinador latest-wins por `kernel_id` invalida emisiones documentales stale y el documento final llega despues por `notebook_progress_update`/`notebook_docx_update`/`notebook_pdf_ready` con el mismo `execution_id`. En UI humana ese flujo viaja por `/ws/notebook`, y la copia visible en `Docx_Documents` se resuelve desde `source_path` antes de degradar al workspace activo"
+
+      - "Cuando el pipeline documental espera o usa el convertidor PDF global, backend publica `shared_resource={ kind: \"pdf_converter\", scope: \"global\", status: \"waiting\"|\"running\" }` en `notebook_progress_update`; `home-summary` refleja ese mismo progreso notebook-scoped para notebooks ocultos y lo limpia solo en terminales documentales reales, no en `notebook_docx_update` intermedios"
+
+      - "Artefactos grandes usan referencias aditivas (`docx_ref`/`pdf_ref`) para evitar base64 masivo por WS; el DOCX reemite siempre una ruta estable aunque el hash semantico no cambie y, si falla el storage persistente/legacy, el backend conserva un fallback descargable por `kernel_id`"
+
+      - "Frontend resuelve DOCX por `docx_ref`, `docx_artifact_id`, `docx_file_token` o lookup estable por `source_path`; `DocxViewer` descarga por `fetch -> blob`, reintenta contra la ruta estable si una ref temporal expira, recibe DOCX visibles sin hyperlinks automáticos ni field codes `HYPERLINK` de procedencia y consulta `docx_provenance_ref` cuando hay preview PDF para usar `Modo origen` sobre un visor `pdfjs-dist` controlado que resuelve `numPages`, outline real, destinos internos, `requestedPage` y render windowed/lazy sin contratos backend nuevos; el click de procedencia prioriza `exact`, puede reresolver `provenance_id` puntuales con `/api/docx/provenance/open?format=json`, reescribe hyperlinks absolutos stale al `API_BASE` activo, puede derivar `provenance_id` desde el propio URL si el overlay no lo trae y, si el destino es una celda sin `file_path`, degrada a `source_path` del documento para abrir la `.ipynb` correcta antes de navegar. La carga del PDF se gobierna por la fuente real del documento y no por la identidad de callbacks del shell, y el teardown drena la generación activa antes de destruir `pdf.js`"
+
+      - "DocxViewer expone `Workbench DOCX` como rail derecho bajo demanda con badge `OK`/`Avisos`/`Revisar`, tabs de Calidad/Visual/Revision/Publicacion/Campos/Diff y acciones explícitas contra `/api/docx/workbench/run`; prioriza `docx_render_*` para estado visual y solo notifica exito de render cuando Workbench devuelve resultado valido; el historial DOCX y Home muestran badges derivados de `docx_quality_*` sin correr auditoria pesada al montar"
+
+      - "Las entradas historicas `docx_is_empty=true` siguen visibles con warning, pero el lookup latest backend y el boton principal `DOCX` del frontend las saltan en favor del ultimo artefacto no vacio"
+
+      - "El historial local frontend solo registra un DOCX nuevo cuando existe identidad estable real (`docx_artifact_id`, `docx_ref`/`docx_download_url`, `docx_file_token`) o base64 inline efectivo; payloads DOCX nulos/stale no deben inflar el contador"
+
+      - "Frontend puede cancelar con notebook_cancel_execution"
+
+    failure_points: ["lock timeout", "kernel hang", "pdf conversion unavailable", "control plane starvation si falla priorizacion", "runtime snapshot degraded on COM/interop objects", "refs DOCX stale/expiradas si se rompe el lifecycle del artifact store"]
+
+  - name: "template_edit_preview_apply"
+
+    modules_involved: ["14", "17", "04", "09", "01"]
+
+    steps:
+
+      - "Frontend sube plantilla por REST (`POST /api/templates/upload`) y adjunta por WS (`template_attach`); `template_upload` queda como fallback legacy solo ante fallo de transporte/no disponibilidad del upload REST. El export portable usa `GET /api/templates/export` y la importación JSON vuelve a reutilizar upload + attach sin WS nuevos"
+
+      - "Para estilos de tabla, frontend versiona `preview_key` con `table_signature`"
+
+      - "Mutaciones (`upload/update/delete/create/apply`) usan `request_id` opcional para correlación determinística de ack/error"
+
+      - "Frontend envía updates de tabla en formato dual (`table_*` + bloque `updates.table`) y backend normaliza"
+
+      - "Render manual puede solicitar `template_preview_style` con `force_refresh=true` para bypass de caché"
+
+      - "Backend procesa preview en background con latest-wins y cancelación (`template_preview_cancel`); frontend también cancela previews activas en timeout, cierre y cambio de pestaña"
+
+      - "Cambios de estilo se aplican con módulos especializados (`template_style_apply`, `template_extract`, `template_preview`) manteniendo compatibilidad en `template_service`"
+
+      - "Para estilos de tabla, `template_service` persiste solo OOXML-safe en `styles.xml`, mueve `tblLook/tblLayout/tblW` a `table_style_runtime_defaults`, sanea plantillas legacy con backup en primer uso y repara declaraciones `xmlns:*` faltantes cuando `mc:Ignorable` queda inconsistente en cualquier parte OOXML"
+
+      - "Kernel recarga template + `table_style_runtime_defaults` + `builder_required_style_defaults`; `docx_builder` reaplica `look/layout/width` sobre cada tabla concreta, hereda `docDefaults` globales materializados desde `styles.xml` y deriva fuentes fallback desde la metadata efectiva del template en vez de volver a `Calibri/Consolas` ciegamente"
+
+      - "La extracción del template suma `document_captions`, mantiene `style_coverage` como resumen requerido y añade `style_browser` con categorías detectadas, conteos y `auto_selected`, permitiendo al editor navegar todos los estilos sin cambiar contratos WS"
+
+      - "La extracción del template publica `content_controls` reutilizando la inspeccion OOXML nativa: el sidebar `Campos` lista SDTs y advierte placeholders `{{TAG}}` no envueltos sin crear una ruta paralela de autoría"
+
+      - "Frontend sincroniza `templateInfo`, conserva el draft local hasta el ack correlado de `template_style_updated`, `template_document_defaults_updated` o `template_semantic_slots_updated`, usa `resolved_font`/`font_source` como fuente efectiva única para cards/panel/preview, navega por estilos detectados con `selection_key` estable y persiste `semantic_style_slots` como contrato Word-first del runtime; `templateInfo`/`templateBlob`/`templateOpenRequest` quedan particionados por notebook en `App.js`, y `category_overrides` queda solo como compatibilidad de import legacy"
+
+      - "Si una preview de tabla falla o expira, el frontend limpia el estado interno de solicitud y permite retry explícito sin recargar la plantilla"
+
+    failure_points: ["preview queue saturation", "stale preview cache", "contention with notebook execution", "invalid table_index rejected", "table preview look mismatch if tblLook not aligned", "serializacion invalida de propiedades runtime de tabla en styles.xml", "feedback visual insuficiente durante latencia de render", "upload > 20MB bloqueado en frontend", "errores REST funcionales ocultados por fallback WS", "cancelacion tardia de preview en cargas extremas", "colisiones por nombres duplicados si se pierde `selection_key` o si los `semantic_style_slots` quedan stale tras reextraer la plantilla"]
+
+  - name: "dependency_analysis_runtime_enriched"
+
+    modules_involved: ["14", "13", "11", "12", "06", "09", "03"]
+
+    steps:
+
+      - "NotebookEditor o MonacoEditor solicitan análisis con `request_id`, `file_path` y `line`/`column` opcionales; si no hay ubicación real el frontend omite ambos campos y evita sintetizar `1:0`"
+
+      - "Backend calcula el grafo AST y, cuando `file_path` pertenece al workspace activo, expande imports Python locales (`import`, `import as`, `from`, `from .`) cargando módulos `.py` de forma lazy/cacheada; además inyecta puentes conservadores `argumento real -> parámetro formal` solo si el callsite y el callee local se resuelven sin ambigüedad"
+
+      - "Backend enriquece con runtime vars cuando hay kernel disponible"
+
+      - "Frontend renderiza el grafo en orientación horizontal (`LR`), usa sizing semántico basado en contenido real del nodo, rutea aristas con corredores ortogonales locales sin curvas ni carriles globales, activa `Resumen` agregado por target/scope/archivo en grafos densos, descarta respuestas stale por `request_id` y puede navegar a notebook o abrir un `.py` externo usando `location.file`"
+
+    failure_points: ["incomplete notebook context", "missing file_path or workspace root for cross-file expansion", "runtime capture timeout", "multiple resolvable callsites for the same callee disable callsite->parameter bridging to avoid cross-caller contamination", "overview grouping drift if `node_id -> group` mapping diverges from Todo/Vecinos"]
+
+  - name: "engineering_design_optimization_loop"
+
+    modules_involved: ["11", "12", "06", "07", "09", "18"]
+
+    steps:
+
+      - "Frontend abre panel de optimización y envía `optimize_design` con variables, objetivo, restricciones y fórmulas"
+
+      - "Backend evalúa candidatos paramétricos y emite `optimization_progress` + `optimization_result`"
+
+      - "Frontend puede pedir envolventes de combinaciones (`analyze_load_envelope`), checks activos (`run_code_checks`) y comparación de escenarios (`compare_scenarios`)"
+
+      - "Resultados alimentan el grafo con decisiones de diseño y trade-offs por request_id"
+
+    failure_points: ["invalid optimization payload", "formula evaluation errors", "insufficient feasible candidates", "stale optimization result handling"]
+
+  - name: "workspace_bootstrap_and_activation"
+
+    modules_involved: ["14", "03", "19"]
+
+    steps:
+
+      - "Al iniciar, frontend consulta `GET /api/system/info` y toma del backend el `workspace_root` efectivo"
+
+      - "Si existe `active_workspace`, `App.js` entra a `workspaceSurface='home'`, consulta `GET /api/system/home-summary` y monta `AgentWorkspaceHome` como superficie persistente shell-owned del workspace"
+
+      - "Si no existe `active_workspace`, `ProjectLauncher` expone una entrada English-first con tres rutas visibles: `Start with Agent`, `Start from example` y `Open project`"
+
+      - "El usuario puede abrir un proyecto existente con `POST /api/system/workspace` o crear uno nuevo con `POST /api/system/workspace/create`"
+
+      - "Si el usuario elige `Start from example`, `App.js` crea un workspace nuevo y materializa el demo estructural canónico usando solo `workspace/create`, `files/create` y `files/write`, antes de abrir `beam_report.ipynb`"
+
+      - "Si el usuario elige `Start with Agent`, el shell encadena selección/creación de workspace con la apertura del panel visible `Agents` y arranca el servicio local cuando hace falta"
+
+      - "`App.js` transforma `homeSummary` (`overview`, `notebook_runtime_items`, `code_runtime_items`, `runtime_items`, `recent_docx_items`, `mcp_service`, `mcp_clients`, `template_inventory`) en `workspaceData.operational`, con franja `Atención`, carriles `Entender` / `Ejecutar` / `Entregar` y acciones rápidas"
+
+      - "El carril `Entregar` consume DOCX y plantillas: `docx_quality_status`, `docx_quality_score`, `docx_quality_counts`, `docx_render_status`, `docx_render_page_count` y `docx_render_cached_pages` alimentan badges/atención cuando vienen en `recent_docx_items`; el CTA `Preparar entrega` abre `Documento` con foco en el Workbench DOCX"
+
+      - "El carril `Entender` mezcla notebooks con runtime, scripts `.py` activos y notebooks de usuario descubiertos por `template_inventory`; además `App.js` superpone `notebookSessionsByPath` con `batchRunState` o `documentPipelineStatus` activo sobre `homeSummary`, evitando que Home quede vacía o marque `Sin ejecución activa` cuando tres `Run All` shell-owned siguen corriendo aunque el resumen backend llegue rezagado"
+
+      - "Archivos, notebooks, explorer y tabs siguen disponibles dentro del mismo workspace, pero pasan a un rol secundario frente a `AgentWorkspaceHome`; `Ir a archivos` mueve siempre a `workspaceSurface='file'` aunque no existan tabs abiertas, abrir un archivo no cancela runtimes vivos y cerrar el último devuelve a `home`"
+
+      - "Desde `home`, solo acciones explícitas del usuario (CTA del home, explorer, tabs o una notificación con `target`) deben mover el shell a `workspaceSurface='file'`; la actividad pasiva y el espejo no secuestran foco"
+
+      - "Cerrar una tab running si cancela su runtime asociado (`notebook_shutdown_kernel` para notebooks, `cancel_code_execution` para `.py`), pero no debe afectar otros tabs abiertos"
+
+      - "El shell navega el picker de carpetas con estado explícito de path actual y usa diálogos controlados para creación/cambio de workspace, evitando prompts nativos frágiles"
+
+      - "El backend persiste el workspace activo fuera de la carpeta de instalación y devuelve `active_workspace`, `workspace_root` y `recent_workspaces`"
+
+      - "FileExplorer carga el árbol en modo lazy (`GET /api/files/tree?depth=1`), busca por nombre con `GET /api/files/search` y usa endpoints explícitos de mutate (`move/copy/duplicate`) para operaciones VSCode-like; los archivos no editables pueden abrirse con la aplicación por defecto vía bridge desktop o `POST /api/files/open-default` en web local"
+
+      - "El watcher backend difunde `workspace_fs_event` por WS; `App.js` recarga tabs limpios, marca conflictos en tabs dirty y `FileExplorer` refresca solo carpetas cargadas cuando el evento cambia la estructura del árbol (`created`, `deleted`, `moved`), evitando jitter del root ante `modified` de archivo"
+
+      - "El shell distingue notebook runtime vs persistable: abrir un `.ipynb`, recargarlo same-path o aplicar una snapshot runtime no debe marcar `modifiedFiles`; si el conflicto persiste, el warning visible se emite una sola vez por path hasta que el archivo vuelva a limpio"
+
+      - "Frontend usa ese contexto para tabs, notebooks, quick open y creación/mutación de archivos"
+
+      - "Clientes MCP posteriores consultan `get_system_info` y descubren el mismo workspace activo, manteniendo coherencia entre UI y automatizaciones"
+
+      - "La home como centro operativo reutiliza contratos REST públicos existentes (`GET /api/system/home-summary`, `POST /api/templates/tokenize`, `POST /api/mcp/restart`, `POST /api/mcp/client-heartbeat`) para navegación orientada a origen y agrupación por cliente; el resumen filtra recursos internos/generados y DOCX vacíos, Home separa `Abrir DOCX`, `Preparar entrega` y `Abrir origen`, e integra clientes MCP dentro de `Ejecutar`"
+
+    failure_points: ["workspace path denied by security policy", "ui/backend workspace drift", "missing parent path for new workspace", "stale local cache after workspace switch", "watcher no disponible y refresco manual insuficiente", "event storm del filesystem sin batching"]
+
+  - name: "mcp_adapted_notebook_session"
+
+    modules_involved: ["19", "14", "15", "04", "03", "01", "17"]
+
+    steps:
+
+      - "Cliente MCP inicializa sesion, lee `inspyro://manifest`, luego `inspyro://guides/start-here`, y opcionalmente reduce superficie con `set_component_profile` antes de usar tools mutantes"
+
+      - "Cliente MCP puede pedir prompts de onboarding/flujo (`start_inspyro_session`, `create_docx_report_notebook`, `recover_mcp_notebook_session`) y usar `completion/complete` sobre prompts/templates para forzar el orden correcto sin mirar el repo; esa capa AI-first ya explicita que `timeout`/`timeout_per_cell` son ajustables a discrecion para COM, SAP2000, Word o conversion pesada"
+
+      - "Cliente MCP invoca notebook_create/notebook_load y MCP registra `kernel_id <-> notebook_path` dentro del bucket de la sesion MCP activa, no en estado global del proceso; `list_session_notebooks` y `inspyro://session/notebooks` exponen ese inventario de forma publica para agentes"
+
+      - "Cada tool MCP expone annotations/tags/task metadata en `tools/list` y emite actividad estructurada `started/completed/failed` con `run_id`, `resource` y `ui_hints`"
+
+      - "Bridge y session_state se resuelven por `session_id`; las tools notebook capturan ese `session_id` una sola vez al inicio, lo propagan a bridge/locks/background tasks/late relays y mantienen observers internos para relayar mensajes tardios del mismo `execution_id` y recuperar resultados si el stream WS cae pero ya existe terminal observado o artefacto exacto"
+
+      - "El perfil MCP por defecto pasa a `authoring`: promueve `notebook_create(cells=...)` o `notebook_load(include_source=True)` seguidos de `notebook_sync_cells`, suma `list_session_notebooks`/`close_session_notebook`, expone `list_cells`/`get_cell`/`find_in_notebook` para inspección puntual de notebooks grandes y soporta corridas largas con `execute_all_cells(background=true)` -> `get_run_status(run_id)` o `inspyro://runs/{run_id}` -> `resume_run`/`cancel_run`; `notebook_create`/`notebook_load` aceptan `reuse_if_loaded` y `close_others`, y las tools notebook detectan uso de la API DOCX en `source`, fuerzan `emit_docx` cuando corresponde, propagan su `timeout` al backend como `execution_timeout_s` (default operativo `600s`), serializan localmente por `kernel_id`, reservan la conversion PDF a la ultima celda ejecutable del batch y no cierran `execute_all_cells` documental hasta que el DOCX final quede visible bajo el `execution_id` público"
+
+      - "Las tools files emiten `file_mutation` para `write/create/rename/delete`, y `reconvert_pdf` publica `open_resource(focus_view=docx)` seguido de `artifact_update(pdf)` cuando el notebook asociado sigue registrado"
+
+      - "Si `execute_cell` o `execute_all_cells` pierde el stream WS antes del cierre limpio, el MCP reconcilia el resultado usando primero el payload terminal ya observado y, si no existe, el artefacto exacto del `execution_id`; la respuesta recuperada expone `recovered_after_disconnect`, `recovery_reason`, `outputs_degraded` y `variables_degraded` sin agregar contratos backend nuevos"
+
+      - "El servidor MCP reporta telemetría al backend principal por `POST /api/mcp/activity/events` y replay granular por `POST /api/mcp/mirror-events`"
+
+      - "El backend persiste actividad reciente, mantiene runs activos y difunde `mcp_activity_event` + `mcp_mirror_event` por WS"
+
+      - "Frontend hidrata historial con `GET /api/mcp/activity`; `useMcpActivity` mantiene feed/notificaciones/runs, persiste `mirrorEnabled` y lo deja en `OFF` solo si no habia preferencia previa"
+
+      - "Cuando un evento de actividad tiene un destino claro, `App.js` puede adjuntar metadata `target` a la notificación visible para abrir `home`, archivo, notebook/celda, `docx`, template o `Agents`; `NotificationCenter` solo renderiza esa affordance y conserva expansión inline para entradas largas sin target"
+
+      - "La UI mantiene `Modo espejo MCP` como control opt-in: el toggle manual sigue habilitado y `start/restart` iniciados desde la UI fuerzan `mirrorEnabled=true` antes de aplicar replay granular"
+
+      - "Cuando la UI está en `home`, `mcp_mirror_event` puede actualizar actividad y artefactos, pero no autoabre archivos ni roba el foco central; la navegación a `file` queda reservada a acciones explícitas del usuario, incluyendo clicks de notificación con `target`"
+
+      - "La experiencia principal `Agents` vive en `AgentWorkspaceHome`; `McpPanel` sigue siendo el inspector avanzado sobre el mismo backend MCP, y la home puede abrirlo filtrado por `client_id/client_label` usando la metadata de heartbeat/actividad agrupada en backend"
+
+      - "El shell activa tabs ya abiertos desde caché local y reserva `reloadFile`/`reloadFileByPath` para recargas reales; `FileExplorer` deja de refrescar el árbol por mero cambio de `activeFilePath`"
+
+      - "Las snapshots same-path (`notebook_loaded`, `notebook_created`, `notebook_snapshot`, `open_resource`) se hidratan como runtime y no deben fabricar dirty local; el espejo solo se bloquea ante edición humana real"
+
+      - "Cuando llega el artefacto final PDF/DOCX por flujo humano, el shell limpia estados stale de conversión, reemplaza refs DOCX viejas con estrategia latest-wins y conserva historial local solo para payloads con identidad estable real"
+
+      - "Las tools de files siguen el workspace activo del backend, pero si el host MCP expone roots intersectan ese workspace y rechazan rutas fuera de esos roots"
+
+      - "Si `list_roots()` no responde a tiempo, `runtime.py` degrada a `[]` y mantiene operativas las tools en vez de colgar la sesión"
+
+      - "Documents y artifacts son link-first: `get_document_docx/pdf` devuelven `token`/`ref`/`resource_uri`/`portable_resource_uri`/`resource_scope` por defecto; `resource_uri` es session-scoped, `portable_resource_uri` es token-backed y `inspyro://artifacts/token/{kind}/{token}` permite leer el binario real entre sesiones MCP. En DOCX humano/UI la descarga estable prioriza `artifact_id` o lookup por `source_path`"
+
+      - "La revision/Workbench DOCX en MCP es opt-in y textual por defecto: `check_document_quality(run=false, profile=\"agent\")` lee cache por `artifact_id`, `kernel_id + execution_id`, ultimo DOCX del kernel o ultimo DOCX por `source_path`; `run=true` ejecuta la auditoria backend y devuelve `quality_status`, `score`, `counts`, secciones y findings limitados sin DOCX, PNG, XML raw ni base64. `run_document_workbench`, `compare_document_versions`, `manage_document_review` y `prepare_document_delivery` devuelven summaries/handles limitados; las operaciones visuales `render_manifest`, `render_page` y `render_all_pages` retornan solo estado/handles `/api/docx/render/resource`; `get_document_docx(include_quality=true)` solo agrega cache compacto si existe"
+
+      - "Las tools MCP solo desreferencian `resource_uri` Workbench de la ruta esperada `/api/docx/workbench/resource` con `workbench_id` y `name`; rutas inesperadas fallan antes del fetch REST"
+
+      - "Si el cliente necesita una ruta local estable, `export_document_docx/pdf` materializan el artefacto dentro de los roots MCP visibles; `prepare_document_delivery` y `export_clean_document_docx` crean variantes/copia limpia opt-in, respetan `overwrite=false` y nunca reemplazan el artefacto original; tools notebook persisten el `.ipynb` real en disco, templates se adjuntan por `template_token` y artifacts descargables quedan vinculados a la misma sesion MCP"
+
+    failure_points: ["missing_notebook_session", "missing_artifact", "missing_quality", "ws_disconnect_mid_execution", "rest/ws contract drift", "activity_event_drop", "mirror_event_drop", "target_dirty_conflict_blocks_replay", "discoverability drift entre instructions/resources/prompts/completions", "regresion de scoping por sesion", "roots MCP no compatibles con el workspace activo", "uso accidental de `--stateless-http` para workflows notebook-first"]
+
+  - name: "engineering_units_runtime_conversion"
+
+    modules_involved: ["18", "11", "12", "01", "04", "09"]
+
+    steps:
+
+      - "Kernel serializa variables `Quantity` con campos canónicos (`unit_canonical`, `unit_display`, `unit_pint`, `aliases`)"
+
+      - "Preamble de unidades usa sentinel `__INSP_UNITS_READY__` + alias de namespace `u` para robustez de runtime"
+
+      - "Frontend carga catálogo dinámico (`GET /api/units/catalog`) y consulta compatibilidad dimensional (`POST /api/units/compatible`) usando firma dimensional canónica, no el orden textual de Pint"
+
+      - "Conversión rápida usa `POST /api/units/convert` con normalización fuerte de aliases y soporte escalar/vector/matriz; la `dimension` retornada se alinea con la identidad normalizada de la unidad"
+
+      - "analysis.py enriquece nodos con unidad runtime priorizando `unit_display`"
+
+      - "DocBuilder valida token de unidad antes de parseo agresivo tipográfico (thin-space + cursiva + superscript)"
+
+    failure_points: ["incompatible_units", "unknown_unit", "invalid_temperature_mode", "catalog drift", "runtime metadata missing", "docx unit token validation miss"]
+
+  - name: "desktop_shell_same_origin_bootstrap"
+
+    modules_involved: ["24", "14", "03", "04", "08", "19"]
+
+    steps:
+
+      - "Electron crea una splash local y avanza por estados de boot English-first (`Initializing shell`, `Starting local backend`, `Waiting for backend health`, `Loading interface`, `Connecting renderer`, `Ready`) antes de revelar la ventana principal"
+
+      - "En desarrollo, Electron espera `http://127.0.0.1:3000` y `http://127.0.0.1:8000/health`, y luego abre la UI React dentro de la ventana desktop"
+
+      - "En producción, Electron toma el lock de instancia única, resuelve un puerto backend disponible y levanta `backend/main.py` como sidecar oculto con `INSPYRO_DESKTOP=1`, `INSPYRO_SERVE_FRONTEND=1`, `INSPYRO_FRONTEND_BUILD_DIR` e `INSPYRO_BACKEND_PORT`"
+
+      - "Backend sirve el build del frontend en `/` y `/static`, mantiene `/api/*`, `/ws`, `/ws/notebook`, `/ws/lsp` y `/docs`, y desactiva CORS de desarrollo por default"
+
+      - "Frontend resuelve `API_BASE`, `WS_URL` y `LSP_WS_URL` en same-origin para desktop/prod, y conserva el fallback `:3000 -> :8000` solo en CRA"
+
+      - "El preload expone `window.inspyroDesktop.isDesktop`, `window.inspyroDesktop.version`, `openExternal(url)`, `openPath(path)`, `openDevTools()`, `reloadRenderer()`, `reportWorkspace(path)`, `reportRendererPhase(phase, payload)`, `emitDesktopNotification(payload)`, `onMenuAction(handler)` y `notifyRendererReady()` solo como alias legacy, todo bajo `contextIsolation=true`, `nodeIntegration=false`, `sandbox=true`"
+
+      - "El renderer separa bootstrap de app-ready: `frontend/src/index.js` emite `renderer_bootstrap_ready`, instala reporters globales y monta `RendererRoot`; ese boundary raíz informa `renderer_app_ready` o `renderer_app_failed`, mientras `App.js` reporta workspace y consume acciones del menú nativo sin reimplementar lógica de negocio en Electron"
+
+      - "Electron observa `did-start-loading`, `did-finish-load`, `dom-ready`, `ready-to-show`, `did-fail-load`, `render-process-gone` y las fases renderer; la ventana principal solo se revela con app visible o con fallback fatal renderer, nunca por timeout ciego"
+
+      - "El branding visible del shell se sincroniza desde `assets/brand/`: `frontend/public/brand/inspyro-mark-light-128.png` alimenta `DesktopTitleBar`, `desktop/splash.html` usa el mark claro, `desktop/assets/icon.ico` sale del tile oscuro y favicon/Word add-in conservan el mark original"
+
+      - "La disponibilidad del convertidor PDF deja de ocupar espacio permanente en el header y pasa a `DocxViewer` como estado contextual de la pestaña `Documento`"
+
+      - "El shell persiste `windowBounds`, estado maximizado y `recentWorkspaces`, reconstruye `Open Recent`, restaura bounds válidos y centraliza notificaciones nativas solo para eventos relevantes"
+
+      - "En builds empaquetados, `desktop/package.json` registra asociaciones `.ipynb`, `.py`, `.inspyro` y protocolo `inspyro://`; `desktop/main.js` encola targets nativos y `App.js` abre el archivo dentro del workspace activo o selecciona su carpeta padre"
+
+      - "El staging excluye caches, plantillas/tokens temporales, descargas DOCX/PDF, probes/dev/tests y archivos de configuración de desarrollo; además sincroniza/verifica imports Python críticos (`pylsp`, `fastmcp`, `mcp`, Jupyter, DOCX/PDF y watchdog`) dentro del runtime empaquetado con `PYTHONNOUSERSITE=1`"
+
+      - "`npm run smoke:packaged` valida recursos de `win-unpacked`, imports Python, renderer visible, `/health`, WebSocket LSP, ciclo MCP, bridge `openPath` y cierre limpio del sidecar"
+
+      - "Las fuentes de UI se empaquetan localmente (`Source Sans 3`, `Source Code Pro`) y el shell deja de depender de Google Fonts remotas"
+
+      - "Al cerrar la app, Electron apaga el backend sidecar para no dejar procesos huérfanos ni puertos abiertos"
+
+    failure_points: ["portable_python_missing", "packaged_python_dependency_missing", "staged_backend_state_leak", "frontend_build_missing", "backend_sidecar_boot_failure", "same_origin_endpoint_drift", "external_navigation_escape", "orphan_backend_process", "renderer_ready_missing", "recent_workspace_drift", "duplicate_desktop_shortcuts", "native_open_target_drift", "packaged_smoke_failure"]
+
+maintenance_rules:
+
+  - "Si cambia un mensaje WS en backend/main.py, actualizar contracts-catalog.md + llm-index.yaml + modulos backend/frontend impactados."
+
+  - "Si cambia un flujo E2E, actualizar feature-threads.md + synergy-matrix.md."
+
+  - "Si cambia ownership de estado/concurrencia, actualizar system-context.md y módulos impactados."
+
+  - "Los tests de diagnostico/manual deben marcarse con `manual`/`integration`/`windows_com` para evitar side-effects en coleccion pytest."
+
+  - "Mantener fechas de 'Última actualización' en formato YYYY-MM-DD."
+
+  - "Toda documentación bajo docs/ y AGENTS.md debe estar en UTF-8 con BOM."
+
+  - "Si cambia el dispatcher WS, ejecutar `.\\agent_debug.ps1 contracts-check` y corregir drift antes de commit."
+
+  - "Para iteración de agente usar `.\\agent_debug.ps1 verify-fast`; para pre-merge usar `.\\agent_debug.ps1 verify`."
+
+  - "Regenerar `frontend/src/contracts/wsMessageTypes.generated.js` con `npm run generate:ws-types` cuando cambie llm-index o contratos WS."
+
+  - "Ejecutar .\\agent_debug.ps1 docs-check al cerrar cambios de documentación."
+
+  - "Si cambias shell desktop o empaquetado same-origin, actualizar `docs/modules/24-desktop-shell.md` + `docs/architecture/frontend-flow.md` + `docs/architecture/system-context.md` + `docs/architecture/feature-threads.md`."
+
+  - "Si cambias backend/mcp_server o la conectividad MCP, ejecutar .\\agent_debug.ps1 mcp-smoke con backend+MCP activos."
+
+  - "Si cambias `backend/dev/mcp_torture_probe.py`, `backend/dev/mcp_torture_assets.py` o la fixture `backend/dev/fixtures/mcp_torture_template.docx`, ejecutar .\\agent_debug.ps1 mcp-torture y revisar `report.json`/`report.md` del workspace generado."
+
+  - "Si cambias `backend/mcp_server/resources/`, `backend/mcp_server/prompts/` o `mcp.instructions`, mantener sincronizados perfiles/nombres públicos del MCP (`authoring` por defecto, `analysis/files/admin` opt-in), actualizar `docs/modules/19-mcp-server.md` + `docs/changelog/19-mcp-server.md` + `docs/architecture/feature-threads.md` y validar `backend/tests/test_mcp_ai_first.py`."
+
+  - "Para benchmark reproducible de carga WS usar `.\\agent_debug.ps1 stress-ws` o `backend/scripts/stress_ws_mix.py`."

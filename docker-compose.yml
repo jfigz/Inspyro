@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock  # Para ejecutar contenedores Docker desde dentro
+    environment:
+      - PYTHONPATH=/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - inspyro-network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://backend:8000
+      - REACT_APP_WS_URL=ws://backend:8000/ws
+    command: npm start
+    networks:
+      - inspyro-network
+
+  # redis eliminado: no se utiliza actualmente
+
+  # Contenedor sandbox para ejecutar código Python del usuario
+  python-sandbox:
+    image: python:3.11-slim
+    volumes:
+      - ./sandbox:/workspace
+    working_dir: /workspace
+    network_mode: none  # Sin acceso a red para seguridad
+    command: tail -f /dev/null  # Mantener el contenedor ejecutándose
+    profiles:
+      - sandbox  # Solo iniciar cuando sea necesario
+
+networks:
+  inspyro-network:
+    driver: bridge

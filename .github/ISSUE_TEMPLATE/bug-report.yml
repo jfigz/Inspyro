@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible problem in the UI, agents surface, notebooks, or report pipeline.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Where did you hit the issue?
+      options:
+        - Launcher / first-run
+        - Workspace shell
+        - Notebook runtime
+        - Document generation
+        - Agents / MCP
+        - Desktop shell
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the problem and the expected behavior.
+      placeholder: A short summary of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Give a minimal sequence we can follow.
+      placeholder: |
+        1. Open ...
+        2. Run ...
+        3. Click ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Share OS, Python, Node, browser or desktop shell, and any relevant agent/client details.
+      placeholder: Windows 11, Python 3.12, Node 20, desktop shell, Codex MCP client...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or artifacts
+      description: Paste useful logs or attach screenshots. Remove secrets before posting.

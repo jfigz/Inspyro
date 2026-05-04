@@ -1,0 +1,129 @@
+/**
+ * SkeletonLoader.css
+ * 
+ * Estilos modernos para el loader de documentos usando glassmorphism
+ * y animaciones de brillo / pulso.
+ */
+
+ .skeleton-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 2rem;
+  box-sizing: border-box;
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.skeleton-page {
+  width: 100%;
+  max-width: 600px;
+  background: rgba(30, 30, 30, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 2.5rem 2rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  /* Glassmorphism subtle effect */
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.skeleton-title {
+  height: 24px;
+  width: 60%;
+  background: #333;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-subtitle {
+  height: 14px;
+  width: 40%;
+  background: #2a2a2a;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-paragraph {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-line {
+  height: 12px;
+  background: #252525;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-line.full { width: 100%; }
+.skeleton-line.partial-80 { width: 80%; }
+.skeleton-line.partial-60 { width: 60%; }
+
+.skeleton-block {
+  height: 120px;
+  width: 100%;
+  background: #252525;
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+
+/* Efecto Shimmer (Brillo pasando a lo largo del skeleton) */
+.skeleton-title::after,
+.skeleton-subtitle::after,
+.skeleton-line::after,
+.skeleton-block::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0,
+      rgba(255, 255, 255, 0.05) 20%,
+      rgba(255, 255, 255, 0.1) 60%,
+      rgba(255, 255, 255, 0)
+  );
+  animation: shimmer 2s infinite;
+}
+
+.skeleton-message {
+  margin-top: 1.5rem;
+  color: #888;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  /* Pulso suave en el texto */
+  animation: textPulse 1.5s infinite alternate;
+}
+
+@keyframes shimmer {
+  100% {
+      transform: translateX(100%);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes textPulse {
+  from { opacity: 0.6; }
+  to { opacity: 1; color: #aaa; }
+}
