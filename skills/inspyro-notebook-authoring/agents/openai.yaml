@@ -1,4 +1,0 @@
-interface:
-  display_name: "Inspyro Notebook Authoring"
-  short_description: "Output-first Inspyro notebooks for internal engineering review and DOCX delivery"
-  default_prompt: "Use $inspyro-notebook-authoring to create or refactor an output-first Inspyro notebook with MCP-first editing, a mandatory first markdown #0 summary and calculation-infrastructure flow cell, mandatory H1+H2 chapter/subchapter numbered hierarchy, rich validation outputs for internal engineering review, one cell_type=\"docx\" report cell per reportable H1 section, project-specific reporting-policy documentation, Word-first template-neutral DOCX authoring, and compact DOCX Workbench quality feedback before delivery."
