@@ -145,6 +145,7 @@ def _resource_item(
         "hash": hashlib.sha256(path.read_bytes()).hexdigest(),
         "mime_type": mime_type,
         "resource_uri": build_docx_render_resource_url(render_id=render_id, name=name),
+        "local_path": str(path),
     }
     if page is not None:
         payload["page"] = page
@@ -222,6 +223,7 @@ def _decorate_manifest(render_id: str, manifest: dict[str, Any]) -> dict[str, An
     payload["status"] = _status_from_manifest(render_id, payload)
     payload["cached_pages"] = _cached_page_count(render_id)
     payload["cache_dir"] = str(_render_dir(render_id))
+    payload["pages_dir"] = str(_pages_dir(render_id))
     pdf_resource = _resource_item(
         render_id=render_id,
         name="document.pdf",
@@ -512,6 +514,8 @@ def render_all_docx_pages_png_cached(
                 if meta.get(key) not in (None, "")
             }
         )
+        if isinstance(meta.get("resource"), dict) and meta["resource"].get("local_path"):
+            rendered_pages[-1]["local_path"] = meta["resource"]["local_path"]
     return {
         "status": "ok",
         "rendered_pages": rendered_pages,

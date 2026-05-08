@@ -213,7 +213,8 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: min(100%, 340px);
+  flex-wrap: wrap;
+  max-width: min(100%, 560px);
   min-height: 28px;
   margin: 0 0 16px;
   padding: 0 11px;
@@ -232,6 +233,19 @@ a {
   letter-spacing: 0.12em;
   line-height: 1.25;
   text-transform: uppercase;
+}
+
+.hero-product-lockup .hero-version-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid rgba(63, 185, 80, 0.24);
+  border-radius: 999px;
+  background: rgba(63, 185, 80, 0.12);
+  color: #b7f7c8;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
 }
 
 .hero-product-lockup::before {
@@ -2418,6 +2432,195 @@ p {
   letter-spacing: 0;
 }
 
+.youtube-main {
+  min-height: 100svh;
+}
+
+.youtube-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(320px, 0.8fr);
+  align-items: center;
+  gap: clamp(34px, 7vw, 92px);
+  min-height: 100svh;
+  padding: 118px clamp(18px, 5vw, 72px) 72px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(13, 17, 23, 0.62), rgba(13, 17, 23, 0.94)),
+    radial-gradient(circle at 70% 42%, rgba(248, 81, 73, 0.18), transparent 30vw);
+}
+
+.youtube-copy {
+  position: relative;
+  z-index: 2;
+  width: min(740px, 100%);
+}
+
+.youtube-copy h1 {
+  margin: 0;
+  color: #f4f8ff;
+  font-size: clamp(4rem, 11vw, 8.2rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+  text-shadow: 0 18px 58px rgba(0, 0, 0, 0.46);
+}
+
+.youtube-status {
+  margin: 18px 0 0;
+  color: #ffb4ae;
+  font-size: clamp(2rem, 5vw, 4.4rem);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.youtube-lede {
+  width: min(560px, 100%);
+  margin: 24px 0 0;
+  color: var(--text-2);
+  font-size: clamp(1.08rem, 2.2vw, 1.45rem);
+  line-height: 1.36;
+}
+
+.youtube-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.youtube-visual {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-height: clamp(320px, 44vw, 520px);
+}
+
+.youtube-orbit {
+  position: absolute;
+  inset: 4%;
+  border: 1px solid rgba(248, 81, 73, 0.2);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(248, 81, 73, 0.16), transparent 34%),
+    radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.08), transparent 58%);
+  box-shadow: 0 0 80px rgba(248, 81, 73, 0.12);
+}
+
+.youtube-orbit span {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--red);
+  box-shadow: 0 0 18px rgba(248, 81, 73, 0.58);
+}
+
+.youtube-orbit span:nth-child(1) {
+  left: 16%;
+  top: 24%;
+}
+
+.youtube-orbit span:nth-child(2) {
+  right: 13%;
+  top: 42%;
+  background: var(--cyan);
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.48);
+}
+
+.youtube-orbit span:nth-child(3) {
+  left: 42%;
+  bottom: 10%;
+  background: var(--green);
+  box-shadow: 0 0 18px rgba(63, 185, 80, 0.48);
+}
+
+.youtube-play-card {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: min(420px, 86vw);
+  min-height: 300px;
+  padding: clamp(28px, 5vw, 46px);
+  border: 1px solid rgba(248, 81, 73, 0.28);
+  border-radius: 24px;
+  background:
+    linear-gradient(145deg, rgba(28, 33, 40, 0.94), rgba(13, 17, 23, 0.94)),
+    var(--bg-panel);
+  box-shadow:
+    var(--shadow-strong),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+}
+
+.youtube-play-card::before {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border: 1px solid rgba(240, 246, 252, 0.08);
+  border-radius: 18px;
+  pointer-events: none;
+}
+
+.youtube-play-mark {
+  display: grid;
+  place-items: center;
+  width: clamp(128px, 20vw, 180px);
+  aspect-ratio: 16 / 11;
+  border-radius: 32px;
+  background:
+    linear-gradient(135deg, #ff3b30, #f85149 62%, #ff7a70);
+  box-shadow:
+    0 24px 56px rgba(248, 81, 73, 0.32),
+    0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+}
+
+.youtube-play-mark span {
+  width: 0;
+  height: 0;
+  margin-left: 8px;
+  border-top: clamp(20px, 3.2vw, 30px) solid transparent;
+  border-bottom: clamp(20px, 3.2vw, 30px) solid transparent;
+  border-left: clamp(34px, 5vw, 52px) solid #fff;
+  filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.22));
+}
+
+.youtube-card-lines {
+  display: grid;
+  gap: 8px;
+  width: min(220px, 100%);
+}
+
+.youtube-card-lines i {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(240, 246, 252, 0.12);
+}
+
+.youtube-card-lines i:nth-child(2) {
+  width: 76%;
+  background: rgba(56, 189, 248, 0.2);
+}
+
+.youtube-card-lines i:nth-child(3) {
+  width: 56%;
+  background: rgba(63, 185, 80, 0.18);
+}
+
+.youtube-play-card strong {
+  color: var(--text);
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  line-height: 1;
+}
+
+.youtube-play-card small {
+  color: var(--text-3);
+  font-size: 0.88rem;
+  font-weight: 800;
+  text-align: center;
+}
+
 .site-footer {
   display: flex;
   align-items: center;
@@ -2427,10 +2630,22 @@ p {
   background: rgba(13, 17, 23, 0.98);
 }
 
+.footer-copy {
+  min-width: 0;
+}
+
 .site-footer p {
   margin: 0;
   color: var(--text-3);
   font-size: 0.88rem;
+}
+
+.footer-credit {
+  margin-top: 5px !important;
+  color: #dff6ff !important;
+  font-size: 0.78rem !important;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .footer-product-lockup {
@@ -2757,6 +2972,35 @@ p {
     padding-inline: 14px;
   }
 
+  .youtube-hero {
+    grid-template-columns: 1fr;
+    gap: 34px;
+    min-height: auto;
+    padding: 96px 14px 54px;
+  }
+
+  .youtube-copy h1 {
+    font-size: clamp(3.8rem, 17vw, 6.2rem);
+  }
+
+  .youtube-status {
+    font-size: clamp(2rem, 10vw, 3.1rem);
+  }
+
+  .youtube-actions .button {
+    width: 100%;
+  }
+
+  .youtube-visual {
+    min-height: 330px;
+  }
+
+  .youtube-play-card {
+    width: min(390px, 100%);
+    min-height: 280px;
+    border-radius: 20px;
+  }
+
   .trace-heading {
     text-align: left;
   }
@@ -2794,11 +3038,48 @@ p {
 
 @media (max-width: 560px) {
   .site-nav {
+    flex-wrap: wrap;
+    align-items: flex-start;
     gap: 10px;
+    padding-bottom: 10px;
   }
 
   .nav-links {
+    display: flex;
+    width: 100%;
+    gap: 7px;
+    overflow-x: auto;
+    padding: 2px 0 4px;
+    scrollbar-width: none;
+  }
+
+  .nav-links::-webkit-scrollbar {
     display: none;
+  }
+
+  .nav-links a,
+  .nav-links a:not(.nav-download):not([href*="github"]) {
+    display: inline-flex;
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 0 9px;
+    border: 1px solid rgba(240, 246, 252, 0.1);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.035);
+    font-size: 0.64rem;
+    white-space: nowrap;
+  }
+
+  .nav-links .nav-download {
+    padding-inline: 11px;
+  }
+
+  .hero {
+    padding-top: 126px;
+  }
+
+  .youtube-hero {
+    padding-top: 126px;
   }
 }
 

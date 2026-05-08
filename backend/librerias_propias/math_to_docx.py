@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+from typing import Any
+
 try:
     import docx  # noqa: F401
     HAS_DOCX = True
@@ -34,6 +37,7 @@ from .docx_builder import (
     doc_end,
     doc_export,
     doc_export_provenance,
+    doc_finalize,
     doc_help,
     doc_reset,
     Equation,
@@ -44,23 +48,28 @@ from .docx_builder.session import DocxSession, get_session
 docblock = doc_block
 
 
+def _caller_namespace(depth: int = 2) -> dict[str, Any]:
+    frame = sys._getframe(depth)
+    return frame.f_globals
+
+
 def doc_clear_cell(block_id: str | None = None, *, cell_id: str | None = None) -> bool:
     """Elimina el contenido asociado al bloque indicado en el documento activo."""
     if block_id is None and cell_id is not None:
         block_id = cell_id
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.clear_cell(block_id)
 
 
 def doc_get_order() -> list[str]:
     """Devuelve el orden lógico actual de los bloques DOCX."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.get_cell_order()
 
 
 def doc_set_order(order: list[str]) -> list[str]:
     """Establece el orden lógico de los bloques DOCX."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.set_cell_order(order)
 
 
@@ -69,25 +78,25 @@ def doc_move_cell(block_id: str | None, direction: str, *, cell_id: str | None =
     effective_id = block_id if block_id is not None else cell_id
     if effective_id is None:
         raise ValueError("Debe proporcionar block_id o cell_id")
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.move_cell(effective_id, direction)
 
 
 def doc_start_cell(notebook_cell_id: str) -> None:
     """Marca el inicio de la ejecución de una celda de notebook."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     session.start_notebook_cell(notebook_cell_id)
 
 
 def doc_finish_cell(notebook_cell_id: str) -> None:
     """Marca el final de la ejecución de una celda notebook y limpia bloques obsoletos."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     session.finish_notebook_cell(notebook_cell_id)
 
 
 def notebook_set_strict_mode(value: bool) -> bool:
     """Activa o desactiva el modo estricto, devolviendo el estado anterior."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     previous = session.is_strict_mode()
     session.set_strict_mode(value)
     return previous
@@ -95,13 +104,13 @@ def notebook_set_strict_mode(value: bool) -> bool:
 
 def notebook_get_event_log() -> list[dict]:
     """Devuelve el registro de eventos generados por las celdas notebook."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.get_event_log()
 
 
 def notebook_clear_event_log() -> None:
     """Limpia el registro de eventos de la sesión actual."""
-    session = get_session()
+    session = get_session(_caller_namespace())
     session.clear_event_log()
 
 
@@ -109,13 +118,16 @@ def notebook_snapshot_cell(block_id: str | None = None, *, include_meta: bool = 
     """Obtiene un snapshot de los elementos generados por un bloque."""
     if block_id is None and cell_id is not None:
         block_id = cell_id
-    session = get_session()
+    session = get_session(_caller_namespace())
     return session.snapshot_cell(cell_id=block_id, include_meta=include_meta)
 
 
 def notebook_clear_cell(block_id: str | None = None, *, cell_id: str | None = None) -> bool:
     """Alias semántico para doc_clear_cell."""
-    return doc_clear_cell(block_id, cell_id=cell_id)
+    if block_id is None and cell_id is not None:
+        block_id = cell_id
+    session = get_session(_caller_namespace())
+    return session.clear_cell(block_id)
 
 __all__ = [
     "HAS_DOCX",
@@ -128,6 +140,7 @@ __all__ = [
     "doc_end",
     "doc_export",
     "doc_export_provenance",
+    "doc_finalize",
     "doc_help",
     "doc_reset",
     "get_session",

@@ -62,6 +62,15 @@ def _docx_has_header_footer_refs(docx_bytes: bytes) -> bool:
     )
 
 
+def _read_docx_body_text(docx_bytes: bytes) -> str:
+    namespaces = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    }
+    with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zf:
+        root = ET.fromstring(zf.read("word/document.xml"))
+    return "".join(node.text or "" for node in root.findall(".//w:body//w:t", namespaces))
+
+
 class TestDocxEmptyArtifacts:
     def _patch_artifact_store(self, root_dir: Path):
         blobs_dir = root_dir / "blobs"
@@ -206,6 +215,13 @@ def test_notebook_docx_preamble_injects_host_api_into_builtins():
     )
     assert "import builtins as __insp_docx_builtins" in instrumented
     assert "setattr(__insp_docx_builtins, __name, globals()[__name])" in instrumented
+    assert "doc_finalize" in instrumented
+
+
+def test_doc_finalize_is_public_from_math_to_docx():
+    from librerias_propias.math_to_docx import doc_finalize
+
+    assert callable(doc_finalize)
 
 
 def test_notebook_instrumentation_does_not_export_docx_inline_in_finally():
@@ -244,6 +260,73 @@ def test_export_restores_template_header_footer_refs_after_raw_add_section():
 
             exported = session.serialize_docx_bytes()
             assert _docx_has_header_footer_refs(exported) is True
+    finally:
+        reset_session_cache()
+
+
+def test_template_body_is_cleared_when_template_is_used_as_runtime_base():
+    reset_session_cache()
+    try:
+        with TemporaryDirectory() as tmp_dir:
+            template_path = Path(tmp_dir) / "template-with-body.docx"
+            template_doc = Document()
+            template_doc.sections[0].header.paragraphs[0].text = "Encabezado plantilla"
+            template_doc.add_paragraph("TEMPLATE BODY PLACEHOLDER")
+            template_doc.save(template_path)
+
+            namespace = {}
+            session = get_session(namespace)
+            session.set_template_path(str(template_path))
+            session.reset(hard=True)
+
+            with build_doc(namespace=namespace, block_id="cell-generated", order=10) as builder:
+                builder.text("GENERATED BODY CONTENT")
+
+            exported = session.serialize_docx_bytes()
+            body_text = _read_docx_body_text(exported)
+            assert "GENERATED BODY CONTENT" in body_text
+            assert "TEMPLATE BODY PLACEHOLDER" not in body_text
+            assert _docx_has_header_footer_refs(exported) is True
+    finally:
+        reset_session_cache()
+
+
+def test_math_to_docx_cell_tracking_uses_notebook_namespace_after_hard_reset():
+    reset_session_cache()
+    try:
+        namespace = {}
+        exec(
+            """
+from librerias_propias.math_to_docx import (
+    build_doc,
+    doc_begin,
+    doc_end,
+    doc_finish_cell,
+    doc_reset,
+    doc_start_cell,
+    get_session,
+)
+
+doc_start_cell("notebook-cell-1")
+doc_begin(block_id="auto-cell-1", order=1, notebook_cell_id="notebook-cell-1")
+doc_reset(hard=True)
+with build_doc(block_id="body-cell-1", order=10, notebook_cell_id="notebook-cell-1") as builder:
+    builder.text("Generated after reset")
+doc_end()
+doc_finish_cell("notebook-cell-1")
+SESSION_DIAG = {
+    "items": sorted((get_session().ns.get("__DOCX_CELL_ITEMS") or {}).keys()),
+    "groups": get_session().ns.get("__DOCX_NOTEBOOK_CELL_GROUPS") or {},
+}
+""",
+            namespace,
+            namespace,
+        )
+
+        session = get_session(namespace)
+        assert "body-cell-1" in namespace["SESSION_DIAG"]["items"]
+        assert namespace["SESSION_DIAG"]["groups"]["notebook-cell-1"] == ["body-cell-1"]
+        assert "Generated after reset" in _read_docx_body_text(session.serialize_docx_bytes())
     finally:
         reset_session_cache()
 

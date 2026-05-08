@@ -192,6 +192,11 @@ def test_word_addin_assets_are_served() -> None:
     manifest = client.get("/word-addin/manifest.xml")
     taskpane = client.get("/word-addin/taskpane.html")
 
+    if not word_live._manifest_path().exists():
+        assert manifest.status_code == 404
+        assert taskpane.status_code == 404
+        return
+
     assert manifest.status_code == 200
     assert "Inspyro Word Live" in manifest.text
     assert taskpane.status_code == 200

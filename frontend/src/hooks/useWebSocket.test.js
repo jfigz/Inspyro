@@ -139,4 +139,120 @@ describe('useWebSocket', () => {
 
     unmount();
   });
+
+  test('queues template attach while disconnected and flushes it after reconnect', () => {
+    const { result, unmount } = renderHook(() => useWebSocket('ws://test'));
+
+    act(() => {
+      MockWebSocket.instances[0].emitClose({ code: 1006, reason: 'offline' });
+    });
+
+    let queued;
+    act(() => {
+      queued = result.current.sendMessage({
+        type: 'template_attach',
+        kernel_id: 'kernel-template',
+        template_token: 'token-a',
+      });
+    });
+
+    expect(queued).toBe(true);
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = MockWebSocket.instances[1];
+    act(() => {
+      secondSocket.emitOpen();
+    });
+
+    expect(secondSocket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'template_attach',
+      kernel_id: 'kernel-template',
+      template_token: 'token-a',
+    }));
+
+    unmount();
+  });
+
+  test('deduplicates queued template attach messages by kernel and token', () => {
+    const { result, unmount } = renderHook(() => useWebSocket('ws://test'));
+
+    act(() => {
+      MockWebSocket.instances[0].emitClose({ code: 1006, reason: 'offline' });
+    });
+
+    act(() => {
+      result.current.sendMessage({
+        type: 'template_attach',
+        kernel_id: 'kernel-template',
+        template_token: 'token-a',
+        path: 'C:\\workspace\\report.ipynb',
+      });
+      result.current.sendMessage({
+        type: 'template_attach',
+        kernel_id: 'kernel-template',
+        template_token: 'token-a',
+        path: 'C:\\workspace\\report.ipynb',
+      });
+    });
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    const secondSocket = MockWebSocket.instances[1];
+    act(() => {
+      secondSocket.emitOpen();
+    });
+
+    expect(secondSocket.send).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  test('queues a critical template message if an open socket send throws', () => {
+    const { result, unmount } = renderHook(() => useWebSocket('ws://test'));
+    const firstSocket = MockWebSocket.instances[0];
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    act(() => {
+      firstSocket.emitOpen();
+    });
+    firstSocket.send.mockImplementationOnce(() => {
+      throw new Error('send failed');
+    });
+
+    let accepted;
+    act(() => {
+      accepted = result.current.sendMessage({
+        type: 'template_attach',
+        kernel_id: 'kernel-template',
+        template_token: 'token-a',
+      });
+    });
+
+    expect(accepted).toBe(true);
+
+    act(() => {
+      firstSocket.emitClose({ code: 1006, reason: 'send-failed' });
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    const secondSocket = MockWebSocket.instances[1];
+    act(() => {
+      secondSocket.emitOpen();
+    });
+
+    expect(secondSocket.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'template_attach',
+      kernel_id: 'kernel-template',
+      template_token: 'token-a',
+    }));
+
+    consoleErrorSpy.mockRestore();
+    unmount();
+  });
 });

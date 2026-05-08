@@ -442,6 +442,7 @@ class DocxSession:
                 try:
                     doc = Document(template_path)
                     self._ensure_template_required_style_defaults(template_path)
+                    self._clear_document_body_preserving_section_properties(doc)
                     _logger.info(f"[DOCX Session] Loaded template from: {template_path}")
                 except Exception as e:
                     # ✅ Raise exception instead of silent fallback
@@ -473,6 +474,19 @@ class DocxSession:
         if self.main_ns is not self.ns and self._DOC_KEY not in self.main_ns:
             self.main_ns[self._DOC_KEY] = doc
         return doc
+
+    @staticmethod
+    def _clear_document_body_preserving_section_properties(doc: DocumentType) -> None:
+        document_element = doc._element  # type: ignore[attr-defined]
+        body = document_element.body
+        existing = list(body)
+        sectPr_nodes = [child for child in existing if child.tag.endswith("}sectPr")]
+        if not sectPr_nodes:
+            sectPr_nodes = [OxmlElement("w:sectPr")]
+        for child in existing:
+            body.remove(child)
+        for sectPr in sectPr_nodes:
+            body.append(sectPr)
 
     def set_template_path(self, path: Optional[str]) -> None:
         """Set the template DOCX path for this session.
@@ -2438,6 +2452,7 @@ class DocxSession:
         new_body_elements = []
         new_items_map = {}
         new_meta_map = {}
+        missing_content_blocks = []
         
         for cid in order:
             # Opción A: Elementos vivos en memoria (Rápido)
@@ -2486,6 +2501,10 @@ class DocxSession:
                     base_meta = copy.deepcopy(meta_map.get(cid, {})) if isinstance(meta_map.get(cid, {}), dict) else {}
                     base_meta["provenance"] = restored_provenance
                     new_meta_map[cid] = base_meta
+                    continue
+
+            if items_map.get(cid) or serialized_map.get(cid):
+                missing_content_blocks.append(cid)
 
         # 3. Aplicar al DOM (Bulk removal & append)
         # Esto es mucho más rápido que remove/append uno por uno si el documento es grande
@@ -2494,6 +2513,15 @@ class DocxSession:
         # Pero body es un proxy, necesitamos acceder a la lista de hijos
         
         # Remover todos los hijos actuales (excepto sectPr que manejaremos explícitamente)
+        if missing_content_blocks:
+            _logger.warning(
+                "[DOCX FastRebuild] No se pudo restaurar %d bloque(s) con contenido; "
+                "se conserva el cuerpo actual para evitar exportar un documento vacio. Bloques: %s",
+                len(missing_content_blocks),
+                ", ".join(str(cid) for cid in missing_content_blocks[:8]),
+            )
+            return
+
         body[:] = new_body_elements + sectPr_nodes
 
         # 4. Actualizar estado
@@ -2563,16 +2591,7 @@ class DocxSession:
             self.main_ns[self._DOC_INITIALIZED_KEY] = False
 
     def clear_document_body(self) -> None:
-        document_element = self.doc._element  # type: ignore[attr-defined]
-        body = document_element.body
-        existing = list(body)
-        sectPr_nodes = [child for child in existing if child.tag.endswith("}sectPr")]
-        if not sectPr_nodes:
-            sectPr_nodes = [OxmlElement("w:sectPr")]
-        for child in existing:
-            body.remove(child)
-        for sectPr in sectPr_nodes:
-            body.append(sectPr)
+        self._clear_document_body_preserving_section_properties(self.doc)
 
     def _prepare_for_export(self) -> None:
         if self._dirty:

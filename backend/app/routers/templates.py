@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import base64
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.security import is_path_safe
-from app.services.template import storage as template_storage
+from app.services import template_binding
 from app.services.template_tokens import store_template_bytes
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
@@ -20,6 +18,23 @@ TEMPLATE_EXPORT_SCHEMA_VERSION = "1.1"
 
 class TemplateTokenizeRequest(BaseModel):
     path: str
+
+
+class TemplateBindRequest(BaseModel):
+    kernel_id: str
+    notebook_path: str
+    notebook: dict | None = None
+    template_json_path: str | None = None
+
+
+def _raise_template_binding_error(exc: template_binding.TemplateBindingError) -> None:
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail={
+            "message": str(exc),
+            "error_code": exc.code,
+        },
+    ) from exc
 
 
 @router.post("/upload")
@@ -80,31 +95,20 @@ async def tokenize_template_path(request_data: TemplateTokenizeRequest):
 
 @router.get("/export")
 async def export_template(kernel_id: str = Query(..., min_length=1)):
-    template = template_storage.get_template(kernel_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="No hay plantilla activa para ese kernel")
-
-    docx_path = template_storage.get_template_docx_path(kernel_id)
-    if not docx_path:
-        raise HTTPException(status_code=404, detail="No se encontro el DOCX persistido de la plantilla")
-
-    path = Path(docx_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="No se encontro el archivo DOCX exportable")
-
     try:
-        docx_bytes = path.read_bytes()
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"No se pudo leer la plantilla: {exc}") from exc
+        return template_binding.build_template_export_package(kernel_id)
+    except template_binding.TemplateBindingError as exc:
+        _raise_template_binding_error(exc)
 
-    if not docx_bytes:
-        raise HTTPException(status_code=500, detail="El DOCX persistido de la plantilla esta vacio")
 
-    return {
-        "schema_version": TEMPLATE_EXPORT_SCHEMA_VERSION,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "kernel_id": kernel_id,
-        "template": template,
-        "docx_base64": base64.b64encode(docx_bytes).decode("ascii"),
-        "file_name": path.name,
-    }
+@router.post("/bind")
+async def bind_template_to_notebook(request_data: TemplateBindRequest):
+    try:
+        return await template_binding.bind_active_template_to_notebook(
+            kernel_id=request_data.kernel_id,
+            notebook_path=request_data.notebook_path,
+            notebook=request_data.notebook,
+            template_json_path=request_data.template_json_path,
+        )
+    except template_binding.TemplateBindingError as exc:
+        _raise_template_binding_error(exc)

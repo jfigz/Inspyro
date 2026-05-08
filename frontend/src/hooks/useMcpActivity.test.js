@@ -182,6 +182,49 @@ describe('useMcpActivity', () => {
     }));
   });
 
+  it('blocks reflected reloads using normalized dirty paths', async () => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    const onNotify = jest.fn();
+    const onReloadActiveFile = jest.fn();
+    const activePathWithForwardSlashes = 'C:/workspace/demo.ipynb';
+
+    const { rerender } = renderHook(({ lastMessage }) => useMcpActivity({
+      connectionStatus: 'connected',
+      lastMessage,
+      activeFile: { path: activePathWithForwardSlashes },
+      modifiedFiles: new Set([ACTIVE_NOTEBOOK]),
+      onNotify,
+      onRefreshWorkspace: jest.fn(),
+      onReloadActiveFile,
+      onApplyArtifact: jest.fn(),
+    }), {
+      initialProps: { lastMessage: null },
+    });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+    rerender({
+      lastMessage: buildEvent({
+        event_id: 'evt-dirty-normalized',
+        tool_name: 'save_notebook',
+        tool_group: 'shell',
+        phase: 'completed',
+        status: 'success',
+        resource: { notebook_path: activePathWithForwardSlashes },
+        ui_hints: {
+          reload_path: activePathWithForwardSlashes,
+        },
+      }),
+    });
+
+    await waitFor(() => expect(onNotify).toHaveBeenCalled());
+    expect(onReloadActiveFile).not.toHaveBeenCalled();
+    expect(onNotify).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'mcp_skip_evt-dirty-normalized',
+      title: 'MCP no reflejado',
+    }));
+  });
+
   it('tracks active agent execution for notebook tools without reloading on completion', async () => {
     localStorage.setItem(STORAGE_KEY, 'true');
     const onReloadActiveFile = jest.fn();

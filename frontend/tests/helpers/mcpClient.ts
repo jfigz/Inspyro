@@ -26,16 +26,28 @@ const parseMcpPayload = (rawText: string): JsonRpcResponse => {
     return JSON.parse(trimmed);
   }
 
-  const dataLines = trimmed
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart());
+  const eventPayloads = trimmed
+    .split(/\r?\n\r?\n/)
+    .map((block) => block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+      .trim())
+    .filter(Boolean);
 
-  if (dataLines.length === 0) {
+  if (eventPayloads.length === 0) {
     throw new Error(`No se pudo parsear respuesta MCP: ${trimmed}`);
   }
 
-  return JSON.parse(dataLines.join('\n'));
+  for (const payload of [...eventPayloads].reverse()) {
+    const message = JSON.parse(payload);
+    if (message && (Object.prototype.hasOwnProperty.call(message, 'id') || message.result || message.error)) {
+      return message;
+    }
+  }
+
+  return JSON.parse(eventPayloads[eventPayloads.length - 1]);
 };
 
 export class McpHttpClient {

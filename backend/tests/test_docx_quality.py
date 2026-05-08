@@ -385,6 +385,19 @@ def test_workbench_operations_return_variants_and_compact_resources():
                     operation="render_manifest",
                     artifact={"artifact_id": "a1", "binary_hash": "workbench-render-hash"},
                 )
+                render_all_result, _ = run_workbench_operation(
+                    source,
+                    operation="render_all_pages",
+                    artifact={"artifact_id": "a1", "binary_hash": "workbench-render-hash"},
+                )
+                render_resource_path = Path(render_result["resources"][0]["local_path"])
+                manifest_pages_dir = Path(manifest_result["visual"]["pages_dir"])
+                manifest_page_path = Path(manifest_result["visual"]["page_resources"][0]["local_path"])
+                render_all_page_path = Path(render_all_result["rendered_pages"][0]["local_path"])
+                assert render_resource_path.is_file()
+                assert manifest_pages_dir.is_dir()
+                assert manifest_page_path.is_file()
+                assert render_all_page_path.is_file()
                 clear_result, _ = run_workbench_operation(
                     source,
                     operation="clear_render_cache",

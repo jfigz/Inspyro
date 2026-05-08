@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
@@ -51,10 +52,14 @@ try:
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.text import WD_COLOR_INDEX, WD_UNDERLINE
     from docx.enum.text import WD_LINE_SPACING
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn as docx_qn
     HAS_DOCX = True
 except ImportError:
     HAS_DOCX = False
     Document = None
+    OxmlElement = None
+    docx_qn = None
 
 # FIX #3: Process tracking for zombie cleanup
 import atexit
@@ -218,6 +223,8 @@ _template_executor = ThreadPoolExecutor(
 )
 _template_executor_shutdown = False
 _template_executor_state_lock = threading.Lock()
+_template_file_locks: Dict[str, threading.RLock] = {}
+_template_file_locks_guard = threading.Lock()
 _system_font_catalog_lock = threading.Lock()
 _system_font_catalog_cache: Optional[List[str]] = None
 
@@ -1335,124 +1342,32 @@ def _sync_document_defaults_in_docx(
 
 
 def _write_docx_parts(docx_path: Path, updates: Dict[str, bytes]) -> None:
-    """Safely write updated parts to DOCX file with locking to prevent race conditions.
-    
-    This function:
-    1. Acquires an exclusive lock on the file to prevent concurrent modifications
-    2. Writes changes to a temporary file in the same directory
-    3. Atomically replaces the original file (Unix) or uses backup strategy (Windows)
-    4. Cleans up temporary files even if errors occur
-    
-    Args:
-        docx_path: Path to the DOCX file to modify
-        updates: Dictionary mapping part paths to their new content bytes
-    
-    Raises:
-        Exception: If file operations fail (lock will be released automatically)
-    """
+    """Safely rewrite selected DOCX ZIP parts and atomically replace the file."""
     if not updates:
         return
-    
-    # Create lock file path
+
     lock_path = docx_path.with_suffix(docx_path.suffix + ".lock")
-    temp_path = None
-    backup_path = None
-    
+
     try:
-        # Ensure parent directory exists
         docx_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Acquire exclusive lock
         with open(lock_path, "w") as lock_file:
             if sys.platform == "win32":
-                # Windows: lock 1 byte at position 0
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             else:
-                # Unix: exclusive lock on entire file
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            
-            try:
-                # Generate unique temp file in same directory (required for atomic move)
-                temp_path = docx_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-                
-                # Write to temp file
-                with zipfile.ZipFile(docx_path, "r") as zin:
-                    with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-                        updated = set()
-                        for item in zin.infolist():
-                            if item.filename in updates:
-                                zout.writestr(item, updates[item.filename])
-                                updated.add(item.filename)
-                            else:
-                                zout.writestr(item, zin.read(item.filename))
-                        # Add any new parts not in original
-                        for filename, data in updates.items():
-                            if filename not in updated:
-                                zout.writestr(filename, data)
-                
-                # Atomic replacement (platform-specific)
-                if sys.platform == "win32":
-                    # Windows doesn't support atomic replace, use backup strategy
-                    backup_path = docx_path.with_suffix(".backup")
-                    
-                    # Remove old backup if exists
-                    if backup_path.exists():
-                        try:
-                            backup_path.unlink()
-                        except OSError:
-                            pass
-                    
-                    # Move current file to backup
-                    if docx_path.exists():
-                        try:
-                            docx_path.rename(backup_path)
-                        except OSError as e:
-                            _logger.warning(f"Could not create backup: {e}")
-                            backup_path = None
-                    
-                    # Move temp to target
-                    try:
-                        temp_path.rename(docx_path)
-                        # Success, remove backup
-                        if backup_path and backup_path.exists():
-                            backup_path.unlink()
-                    except Exception as e:
-                        # Rollback: restore from backup
-                        _logger.error(f"Failed to replace DOCX, rolling back: {e}")
-                        if backup_path and backup_path.exists():
-                            backup_path.rename(docx_path)
-                        raise
-                else:
-                    # Unix: atomic replace (Python 3.3+)
-                    temp_path.replace(docx_path)
-                
-                temp_path = None  # Successfully moved, don't cleanup
-                
-            finally:
-                # Lock is automatically released when file closes
-                pass
-    
+
+            original_bytes = docx_path.read_bytes()
+            rewritten_bytes = _rewrite_docx_bytes(original_bytes, updates)
+            if not rewritten_bytes or not zipfile.is_zipfile(io.BytesIO(rewritten_bytes)):
+                raise IOError(f"Failed to build valid DOCX after part update: {docx_path}")
+            _atomic_write_bytes(docx_path, rewritten_bytes, label="DOCX")
+
     finally:
-        # Cleanup lock file
         try:
             if lock_path.exists():
                 lock_path.unlink()
         except Exception:
             pass
-        
-        # Cleanup temp file if still exists (error occurred)
-        if temp_path and temp_path.exists():
-            try:
-                temp_path.unlink()
-            except Exception:
-                pass
-        
-        # Cleanup backup if still exists (shouldn't happen normally)
-        if backup_path and backup_path.exists():
-            try:
-                backup_path.unlink()
-            except Exception:
-                pass
 
 
 def _apply_style_xml_updates(
@@ -1520,6 +1435,280 @@ def _apply_style_xml_updates(
         return runtime_patch
     except Exception as exc:
         _logger.error(f"[Template] Failed to apply XML updates: {exc}")
+        raise
+
+
+def _set_style_val_child(style_elem: ET.Element, tag: str, value: Any) -> None:
+    existing = style_elem.find(f"w:{tag}", DOCX_NS)
+    if value in (None, ""):
+        if existing is not None:
+            style_elem.remove(existing)
+        return
+    child = existing if existing is not None else ET.Element(_qn("w", tag))
+    child.set(_qn("w", "val"), str(value))
+    if existing is None:
+        style_elem.append(child)
+
+
+def _set_style_flag_child(style_elem: ET.Element, tag: str, value: Any) -> None:
+    existing = style_elem.find(f"w:{tag}", DOCX_NS)
+    normalized = _coerce_optional_bool(value)
+    if normalized is None:
+        return
+    if not normalized:
+        if existing is not None:
+            style_elem.remove(existing)
+        return
+    if existing is None:
+        style_elem.append(ET.Element(_qn("w", tag)))
+
+
+def _set_on_off_prop(parent: ET.Element, tag: str, value: Any) -> None:
+    existing = parent.find(f"w:{tag}", DOCX_NS)
+    normalized = _coerce_optional_bool(value)
+    if normalized is None:
+        return
+    if existing is None:
+        existing = ET.SubElement(parent, _qn("w", tag))
+    if normalized:
+        existing.attrib.pop(_qn("w", "val"), None)
+    else:
+        existing.set(_qn("w", "val"), "0")
+
+
+def _set_val_prop(parent: ET.Element, tag: str, value: Any, *, attr: str = "val") -> None:
+    existing = parent.find(f"w:{tag}", DOCX_NS)
+    if value in (None, ""):
+        if existing is not None:
+            parent.remove(existing)
+        return
+    child = existing if existing is not None else ET.Element(_qn("w", tag))
+    child.set(_qn("w", attr), str(value))
+    if existing is None:
+        parent.append(child)
+
+
+def _half_points(value: Any) -> Optional[str]:
+    try:
+        return str(int(round(float(value) * 2)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_word_style_xml_updates(
+    docx_path: Path,
+    style_name: str,
+    style_id: Optional[str],
+    updates: Dict[str, Any],
+) -> None:
+    word_style = updates.get("word_style") if isinstance(updates, dict) else None
+    metadata = updates.get("_word_style_metadata") if isinstance(updates, dict) else None
+    visibility = updates.get("style_visibility") if isinstance(updates, dict) else None
+    if isinstance(word_style, dict):
+        if not isinstance(metadata, dict):
+            metadata = word_style.get("metadata")
+        if not isinstance(visibility, dict):
+            visibility = word_style.get("visibility")
+    if not any(isinstance(value, dict) for value in (word_style, metadata, visibility)):
+        return
+
+    try:
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            try:
+                styles_xml = zin.read("word/styles.xml")
+            except KeyError:
+                _logger.warning("[Template] styles.xml not found in DOCX")
+                return
+            namespace_hints = _collect_docx_namespace_hints_from_zip(zin)
+
+        styles_root = ET.fromstring(styles_xml)
+        style_elem = _find_style_element(styles_root, style_name, style_id)
+        if style_elem is None:
+            _logger.warning("[Template] Style '%s' not found for Word style updates", style_name)
+            return
+
+        metadata = metadata if isinstance(metadata, dict) else {}
+        visibility = visibility if isinstance(visibility, dict) else {}
+        for key, tag in (
+            ("based_on", "basedOn"),
+            ("basedOn", "basedOn"),
+            ("next", "next"),
+            ("link", "link"),
+            ("ui_priority", "uiPriority"),
+            ("uiPriority", "uiPriority"),
+        ):
+            if key in metadata:
+                _set_style_val_child(style_elem, tag, metadata.get(key))
+        for key, tag in (
+            ("hidden", "hidden"),
+            ("semi_hidden", "semiHidden"),
+            ("semiHidden", "semiHidden"),
+            ("q_format", "qFormat"),
+            ("qFormat", "qFormat"),
+            ("unhide_when_used", "unhideWhenUsed"),
+            ("unhideWhenUsed", "unhideWhenUsed"),
+        ):
+            if key in visibility:
+                _set_style_flag_child(style_elem, tag, visibility.get(key))
+            elif key in metadata:
+                _set_style_flag_child(style_elem, tag, metadata.get(key))
+
+        font_block: Dict[str, Any] = {}
+        paragraph_block: Dict[str, Any] = {}
+        if isinstance(word_style, dict):
+            font_block = word_style.get("font") or word_style.get("run") or {}
+            paragraph_block = word_style.get("paragraph") or {}
+
+        if isinstance(font_block, dict) and font_block:
+            r_pr = style_elem.find("w:rPr", DOCX_NS)
+            if r_pr is None:
+                r_pr = ET.SubElement(style_elem, _qn("w", "rPr"))
+            r_fonts = r_pr.find("w:rFonts", DOCX_NS)
+            font_attr_map = {
+                "ascii_font_name": "ascii",
+                "hansi_font_name": "hAnsi",
+                "hAnsi_font_name": "hAnsi",
+                "complex_script_font_name": "cs",
+                "cs_font_name": "cs",
+                "east_asia_font_name": "eastAsia",
+                "eastAsia_font_name": "eastAsia",
+                "ascii_theme": "asciiTheme",
+                "hansi_theme": "hAnsiTheme",
+                "hAnsi_theme": "hAnsiTheme",
+                "complex_script_theme": "csTheme",
+                "cs_theme": "csTheme",
+                "east_asia_theme": "eastAsiaTheme",
+                "eastAsia_theme": "eastAsiaTheme",
+            }
+            for key, attr_name in font_attr_map.items():
+                if key not in font_block:
+                    continue
+                if r_fonts is None:
+                    r_fonts = ET.SubElement(r_pr, _qn("w", "rFonts"))
+                value = font_block.get(key)
+                if value in (None, ""):
+                    r_fonts.attrib.pop(_qn("w", attr_name), None)
+                else:
+                    r_fonts.set(_qn("w", attr_name), str(value))
+
+            if "complex_script_size_pt" in font_block:
+                hp = _half_points(font_block.get("complex_script_size_pt"))
+                if hp is not None:
+                    _set_val_prop(r_pr, "szCs", hp)
+            if "character_spacing_twips" in font_block:
+                _set_val_prop(r_pr, "spacing", font_block.get("character_spacing_twips"))
+            if "scale_percent" in font_block:
+                _set_val_prop(r_pr, "w", font_block.get("scale_percent"))
+            if "kerning_pt" in font_block:
+                hp = _half_points(font_block.get("kerning_pt"))
+                if hp is not None:
+                    _set_val_prop(r_pr, "kern", hp)
+            if "position_pt" in font_block:
+                hp = _half_points(font_block.get("position_pt"))
+                if hp is not None:
+                    _set_val_prop(r_pr, "position", hp)
+
+            underline_color = font_block.get("underline_color_rgb")
+            if underline_color not in (None, ""):
+                u = _ensure_child(r_pr, "u")
+                u.set(_qn("w", "color"), _normalize_ooxml_color(underline_color) or str(underline_color).replace("#", ""))
+
+            color_theme = font_block.get("color_theme")
+            if color_theme:
+                color = _ensure_child(r_pr, "color")
+                color.set(_qn("w", "themeColor"), str(color_theme))
+                for source_key, attr_name in (("color_theme_tint", "themeTint"), ("color_theme_shade", "themeShade")):
+                    if source_key in font_block and font_block.get(source_key) not in (None, ""):
+                        color.set(_qn("w", attr_name), str(font_block.get(source_key)))
+
+            if any(key in font_block for key in ("language", "language_east_asia", "language_bidi")):
+                lang = _ensure_child(r_pr, "lang")
+                for key, attr_name in (
+                    ("language", "val"),
+                    ("language_east_asia", "eastAsia"),
+                    ("language_bidi", "bidi"),
+                ):
+                    if key in font_block:
+                        value = font_block.get(key)
+                        if value in (None, ""):
+                            lang.attrib.pop(_qn("w", attr_name), None)
+                        else:
+                            lang.set(_qn("w", attr_name), str(value))
+
+            for key, tag in (
+                ("complex_script_bold", "bCs"),
+                ("complex_script_italic", "iCs"),
+                ("hidden", "vanish"),
+                ("vanish", "vanish"),
+                ("shadow", "shadow"),
+                ("outline", "outline"),
+                ("emboss", "emboss"),
+                ("imprint", "imprint"),
+                ("no_proof", "noProof"),
+                ("rtl", "rtl"),
+                ("complex_script", "cs"),
+                ("spec_vanish", "specVanish"),
+                ("web_hidden", "webHidden"),
+            ):
+                if key in font_block:
+                    _set_on_off_prop(r_pr, tag, font_block.get(key))
+
+        if isinstance(paragraph_block, dict) and paragraph_block:
+            p_pr = style_elem.find("w:pPr", DOCX_NS)
+            if p_pr is None:
+                p_pr = ET.SubElement(style_elem, _qn("w", "pPr"))
+            for key, tag in (
+                ("text_alignment", "textAlignment"),
+                ("text_direction", "textDirection"),
+            ):
+                if key in paragraph_block:
+                    _set_val_prop(p_pr, tag, paragraph_block.get(key))
+
+            for key, tag in (
+                ("contextual_spacing", "contextualSpacing"),
+                ("mirror_indents", "mirrorIndents"),
+                ("suppress_line_numbers", "suppressLineNumbers"),
+                ("suppress_auto_hyphens", "suppressAutoHyphens"),
+                ("kinsoku", "kinsoku"),
+                ("word_wrap", "wordWrap"),
+                ("overflow_punctuation", "overflowPunct"),
+                ("top_line_punctuation", "topLinePunct"),
+                ("auto_space_de", "autoSpaceDE"),
+                ("auto_space_dn", "autoSpaceDN"),
+                ("bidi", "bidi"),
+                ("adjust_right_indent", "adjustRightInd"),
+                ("snap_to_grid", "snapToGrid"),
+            ):
+                if key in paragraph_block:
+                    _set_on_off_prop(p_pr, tag, paragraph_block.get(key))
+
+            tabs = paragraph_block.get("tabs")
+            if isinstance(tabs, list):
+                existing_tabs = p_pr.find("w:tabs", DOCX_NS)
+                if existing_tabs is not None:
+                    p_pr.remove(existing_tabs)
+                if tabs:
+                    tabs_elem = ET.SubElement(p_pr, _qn("w", "tabs"))
+                    for tab_info in tabs:
+                        if not isinstance(tab_info, dict):
+                            continue
+                        pos = tab_info.get("pos_twips") or tab_info.get("position_twips")
+                        if pos in (None, ""):
+                            continue
+                        tab_elem = ET.SubElement(tabs_elem, _qn("w", "tab"))
+                        tab_elem.set(_qn("w", "pos"), str(pos))
+                        tab_elem.set(_qn("w", "val"), str(tab_info.get("val") or "left"))
+                        if tab_info.get("leader"):
+                            tab_elem.set(_qn("w", "leader"), str(tab_info.get("leader")))
+
+        updated_xml = _serialize_ooxml_part(
+            styles_root,
+            styles_xml,
+            namespace_hints=namespace_hints,
+        )
+        _write_docx_parts(docx_path, {"word/styles.xml": updated_xml})
+    except Exception as exc:
+        _logger.error("[Template] Failed to apply Word style updates: %s", exc)
         raise
 
 
@@ -2111,6 +2300,10 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
     p_pr = style_elem.find("w:pPr", DOCX_NS)
     tbl_pr = style_elem.find("w:tblPr", DOCX_NS)
     tc_pr = style_elem.find("w:tcPr", DOCX_NS)
+    r_pr_props = _collect_props(r_pr)
+    p_pr_props = _collect_props(p_pr)
+    tbl_pr_props = _collect_props(tbl_pr)
+    tc_pr_props = _collect_props(tc_pr)
 
     tbl_style_props: List[Dict[str, Any]] = []
     for tbl_style in style_elem.findall("w:tblStylePr", DOCX_NS):
@@ -2135,10 +2328,44 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
         "q_format": style_elem.find("w:qFormat", DOCX_NS) is not None,
         "unhide_when_used": style_elem.find("w:unhideWhenUsed", DOCX_NS) is not None,
         "outline_level": outline_level,
-        "r_pr": _collect_props(r_pr),
-        "p_pr": _collect_props(p_pr),
-        "tbl_pr": _collect_props(tbl_pr),
-        "tc_pr": _collect_props(tc_pr),
+        "style_visibility": {
+            "hidden": style_elem.find("w:hidden", DOCX_NS) is not None,
+            "semi_hidden": style_elem.find("w:semiHidden", DOCX_NS) is not None,
+            "q_format": style_elem.find("w:qFormat", DOCX_NS) is not None,
+            "unhide_when_used": style_elem.find("w:unhideWhenUsed", DOCX_NS) is not None,
+        },
+        "word_style": {
+            "metadata": {
+                "style_id": style_id,
+                "display_name": display_name,
+                "type": style_type,
+                "based_on": based_on,
+                "next": next_style,
+                "link": link_style,
+                "ui_priority": int(ui_priority) if ui_priority and ui_priority.isdigit() else ui_priority,
+                "default": _as_bool(style_elem.get(_qn("w", "default"))),
+                "custom": _as_bool(style_elem.get(_qn("w", "customStyle"))),
+            },
+            "visibility": {
+                "hidden": style_elem.find("w:hidden", DOCX_NS) is not None,
+                "semi_hidden": style_elem.find("w:semiHidden", DOCX_NS) is not None,
+                "q_format": style_elem.find("w:qFormat", DOCX_NS) is not None,
+                "unhide_when_used": style_elem.find("w:unhideWhenUsed", DOCX_NS) is not None,
+            },
+            "font": _parse_word_style_font_nodes(r_pr_props),
+            "paragraph": _parse_word_style_paragraph_nodes(p_pr_props),
+            "raw": {
+                "r_pr": r_pr_props,
+                "p_pr": p_pr_props,
+                "tbl_pr": tbl_pr_props,
+                "tc_pr": tc_pr_props,
+                "tbl_style_pr": tbl_style_props or None,
+            },
+        },
+        "r_pr": r_pr_props,
+        "p_pr": p_pr_props,
+        "tbl_pr": tbl_pr_props,
+        "tc_pr": tc_pr_props,
         "tbl_style_pr": tbl_style_props or None,
         "raw_xml": _serialize_xml(style_elem),
     }
@@ -2404,13 +2631,21 @@ def _parse_sections(document_root: ET.Element) -> List[Dict[str, Any]]:
     return sections
 
 
-def _extract_table_info_from_element(tbl_idx: int, tbl: ET.Element) -> Dict[str, Any]:
+def _extract_table_info_from_element(
+    tbl_idx: int,
+    tbl: ET.Element,
+    style_name_map: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     table_info: Dict[str, Any] = {
         "index": tbl_idx,
         "rows": 0,
         "cols": 0,
         "style_name": None,
         "style_id": None,
+        "style_display_name": None,
+        "uses_table_style": False,
+        "has_direct_table_format": False,
+        "direct_format_keys": [],
         "table_properties": {},
         "first_row_format": {},
         "sample_cells": [],
@@ -2423,8 +2658,12 @@ def _extract_table_info_from_element(tbl_idx: int, tbl: ET.Element) -> Dict[str,
         table_info["table_properties"] = _collect_props(tbl_pr)
         tbl_style = tbl_pr.find("w:tblStyle", DOCX_NS)
         if tbl_style is not None:
-            table_info["style_id"] = tbl_style.get(_qn("w", "val"))
-            table_info["style_name"] = table_info["style_id"]
+            style_ref = tbl_style.get(_qn("w", "val"))
+            style_display_name = (style_name_map or {}).get(style_ref, style_ref) if style_ref else None
+            table_info["style_id"] = style_ref
+            table_info["style_name"] = style_display_name
+            table_info["style_display_name"] = style_display_name
+            table_info["uses_table_style"] = bool(style_ref)
 
         parsed_tbl_pr = _parse_tblpr_nodes(_collect_props(tbl_pr))
         table_info["parsed_properties"] = parsed_tbl_pr
@@ -2433,6 +2672,23 @@ def _extract_table_info_from_element(tbl_idx: int, tbl: ET.Element) -> Dict[str,
         table_info["margins"] = parsed_tbl_pr.get("cell_margins")
         table_info["alignment"] = parsed_tbl_pr.get("alignment")
         table_info["look"] = parsed_tbl_pr.get("look")
+
+        direct_format_keys = []
+        for key, label in (
+            ("borders", "borders"),
+            ("shading_color", "shading"),
+            ("cell_margins", "margins"),
+            ("alignment", "alignment"),
+            ("cell_spacing_pt", "cell_spacing"),
+            ("indent_pt", "indent"),
+        ):
+            value = parsed_tbl_pr.get(key)
+            if isinstance(value, dict):
+                if value:
+                    direct_format_keys.append(label)
+            elif value not in (None, ""):
+                direct_format_keys.append(label)
+        table_info["direct_format_keys"] = direct_format_keys
 
     rows = tbl.findall("w:tr", DOCX_NS)
     table_info["rows"] = len(rows)
@@ -2511,6 +2767,11 @@ def _extract_table_info_from_element(tbl_idx: int, tbl: ET.Element) -> Dict[str,
         font_diff = bool(meaningful_first_font) and meaningful_first_font != meaningful_other_font
 
         table_info["has_distinct_header"] = bool(shading_diff or border_diff or font_diff)
+        if table_info["has_distinct_header"]:
+            table_info["direct_format_keys"] = sorted({
+                *(table_info.get("direct_format_keys") or []),
+                "header",
+            })
         table_info["first_row_format"] = {
             "sample_cell": first_sample_cell,
             "font_properties": first_font,
@@ -2520,6 +2781,7 @@ def _extract_table_info_from_element(tbl_idx: int, tbl: ET.Element) -> Dict[str,
             "vertical_align": first_sample_cell.get("vertical_align"),
         }
 
+    table_info["has_direct_table_format"] = bool(table_info.get("direct_format_keys"))
     return table_info
 
 
@@ -2707,7 +2969,7 @@ def _extract_document_tables_and_captions(docx_bytes: bytes) -> tuple[List[Dict[
             continue
         entry: Dict[str, Any] = {"element": child, "tag": tag, "object": None}
         if tag == "tbl":
-            table_info = _extract_table_info_from_element(len(tables), child)
+            table_info = _extract_table_info_from_element(len(tables), child, style_name_map)
             tables.append(table_info)
             entry["object"] = {"type": "table", "index": table_info["index"]}
         elif tag == "p" and _paragraph_contains_drawing(child):
@@ -3177,6 +3439,138 @@ def _parse_ppr_nodes(nodes: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
             if outline_val is not None:
                 para["outline_level"] = outline_val
     return para
+
+
+def _parse_word_style_font_nodes(nodes: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    if not nodes:
+        return {}
+    props: Dict[str, Any] = {}
+    for node in nodes:
+        tag = node.get("tag")
+        attrs = node.get("attrs") or {}
+        if tag == "rFonts":
+            attr_map = {
+                "ascii": "ascii_font_name",
+                "hAnsi": "hansi_font_name",
+                "cs": "complex_script_font_name",
+                "eastAsia": "east_asia_font_name",
+                "asciiTheme": "ascii_theme",
+                "hAnsiTheme": "hansi_theme",
+                "csTheme": "complex_script_theme",
+                "eastAsiaTheme": "east_asia_theme",
+            }
+            for attr_name, output_key in attr_map.items():
+                if attrs.get(attr_name):
+                    props[output_key] = attrs.get(attr_name)
+        elif tag == "szCs":
+            size_val = _to_int(attrs.get("val"))
+            if size_val is not None:
+                props["complex_script_size_pt"] = round(size_val / 2.0, 1)
+        elif tag == "spacing":
+            if attrs.get("val") is not None:
+                props["character_spacing_twips"] = attrs.get("val")
+        elif tag == "w":
+            if attrs.get("val") is not None:
+                props["scale_percent"] = attrs.get("val")
+        elif tag == "kern":
+            kern_val = _to_int(attrs.get("val"))
+            if kern_val is not None:
+                props["kerning_pt"] = round(kern_val / 2.0, 1)
+        elif tag == "position":
+            pos_val = _to_int(attrs.get("val"))
+            if pos_val is not None:
+                props["position_pt"] = round(pos_val / 2.0, 1)
+        elif tag == "u":
+            if attrs.get("color"):
+                props["underline_color_rgb"] = attrs.get("color")
+        elif tag == "color":
+            if attrs.get("themeColor"):
+                props["color_theme"] = attrs.get("themeColor")
+            if attrs.get("themeTint"):
+                props["color_theme_tint"] = attrs.get("themeTint")
+            if attrs.get("themeShade"):
+                props["color_theme_shade"] = attrs.get("themeShade")
+        elif tag == "lang":
+            if attrs.get("val"):
+                props["language"] = attrs.get("val")
+            if attrs.get("eastAsia"):
+                props["language_east_asia"] = attrs.get("eastAsia")
+            if attrs.get("bidi"):
+                props["language_bidi"] = attrs.get("bidi")
+        elif tag in {"bCs", "iCs", "vanish", "shadow", "outline", "emboss", "imprint", "noProof", "rtl", "cs", "specVanish", "webHidden"}:
+            key_map = {
+                "bCs": "complex_script_bold",
+                "iCs": "complex_script_italic",
+                "vanish": "vanish",
+                "shadow": "shadow",
+                "outline": "outline",
+                "emboss": "emboss",
+                "imprint": "imprint",
+                "noProof": "no_proof",
+                "rtl": "rtl",
+                "cs": "complex_script",
+                "specVanish": "spec_vanish",
+                "webHidden": "web_hidden",
+            }
+            props[key_map[tag]] = _normalize_bool_attr(attrs.get("val"))
+    return props
+
+
+def _parse_word_style_paragraph_nodes(nodes: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    if not nodes:
+        return {}
+    props: Dict[str, Any] = {}
+    for node in nodes:
+        tag = node.get("tag")
+        attrs = node.get("attrs") or {}
+        if tag == "textAlignment" and attrs.get("val"):
+            props["text_alignment"] = attrs.get("val")
+        elif tag == "textDirection" and attrs.get("val"):
+            props["text_direction"] = attrs.get("val")
+        elif tag == "tabs":
+            tabs = []
+            for child in node.get("children") or []:
+                if child.get("tag") != "tab":
+                    continue
+                child_attrs = child.get("attrs") or {}
+                tabs.append({
+                    "val": child_attrs.get("val"),
+                    "leader": child_attrs.get("leader"),
+                    "pos_twips": child_attrs.get("pos"),
+                })
+            props["tabs"] = tabs
+        elif tag in {
+            "contextualSpacing",
+            "mirrorIndents",
+            "suppressLineNumbers",
+            "suppressAutoHyphens",
+            "kinsoku",
+            "wordWrap",
+            "overflowPunct",
+            "topLinePunct",
+            "autoSpaceDE",
+            "autoSpaceDN",
+            "bidi",
+            "adjustRightInd",
+            "snapToGrid",
+        }:
+            key_map = {
+                "contextualSpacing": "contextual_spacing",
+                "mirrorIndents": "mirror_indents",
+                "suppressLineNumbers": "suppress_line_numbers",
+                "suppressAutoHyphens": "suppress_auto_hyphens",
+                "kinsoku": "kinsoku",
+                "wordWrap": "word_wrap",
+                "overflowPunct": "overflow_punctuation",
+                "topLinePunct": "top_line_punctuation",
+                "autoSpaceDE": "auto_space_de",
+                "autoSpaceDN": "auto_space_dn",
+                "bidi": "bidi",
+                "adjustRightInd": "adjust_right_indent",
+                "snapToGrid": "snap_to_grid",
+            }
+            props[key_map[tag]] = _normalize_bool_attr(attrs.get("val"))
+    return props
 
 
 def _parse_numpr_from_ppr(nodes: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
@@ -4341,20 +4735,90 @@ def _load_template_json_file(json_path: Path) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+def _get_template_file_lock(kernel_id: str) -> threading.RLock:
+    safe_id = _sanitize_kernel_id(kernel_id)
+    with _template_file_locks_guard:
+        lock = _template_file_locks.get(safe_id)
+        if lock is None:
+            lock = threading.RLock()
+            _template_file_locks[safe_id] = lock
+        return lock
+
+
+def _replace_with_retry(source: Path, target: Path, *, attempts: int = 8, delay_s: float = 0.05) -> None:
+    last_exc: Optional[BaseException] = None
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            last_exc = exc
+            if attempt == attempts - 1:
+                break
+            time.sleep(delay_s * (2 ** attempt))
+    if last_exc is not None:
+        raise last_exc
+
+
+def _atomic_write_bytes(path: Path, data: bytes, *, label: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if not temp_path.exists() or temp_path.stat().st_size == 0:
+            raise IOError(f"Failed to write temporary {label} file: {temp_path}")
+        _replace_with_retry(temp_path, path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                _logger.warning("[Template] Could not remove temporary %s file: %s", label, temp_path)
+    if not path.exists() or path.stat().st_size == 0:
+        raise IOError(f"Failed to write {label} file: {path}")
+
+
+def _quarantine_template_artifact(path: Path, *, reason: str) -> Optional[Path]:
+    if not path.exists():
+        return None
+    quarantine_path = path.with_suffix(f".quarantine_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{path.suffix}")
+    try:
+        _replace_with_retry(path, quarantine_path)
+        _logger.warning("[Template] Quarantined template artifact %s -> %s (%s)", path, quarantine_path, reason)
+        return quarantine_path
+    except Exception as exc:
+        _logger.error("[Template] Could not quarantine template artifact %s: %s", path, exc)
+        return None
+
+
+def _regenerate_clean_template_docx(path: Path) -> bool:
+    if not HAS_DOCX or Document is None:
+        return False
+    try:
+        document = Document()
+        document.add_paragraph("")
+        buffer = io.BytesIO()
+        document.save(buffer)
+        _atomic_write_bytes(path, buffer.getvalue(), label="DOCX")
+        _logger.warning("[Template] Regenerated clean template DOCX at %s", path)
+        return True
+    except Exception as exc:
+        _logger.error("[Template] Could not regenerate clean template DOCX %s: %s", path, exc)
+        return False
+
+
 def _write_template_files(kernel_id: str, docx_bytes: bytes, extracted_json: Dict[str, Any]) -> tuple[Path, Path]:
-    _ensure_template_dir(kernel_id)
-    docx_path = _get_template_docx_path(kernel_id)
-    json_path = _get_template_json_path(kernel_id)
+    with _get_template_file_lock(kernel_id):
+        _ensure_template_dir(kernel_id)
+        docx_path = _get_template_docx_path(kernel_id)
+        json_path = _get_template_json_path(kernel_id)
 
-    with open(docx_path, "wb") as f:
-        f.write(docx_bytes)
-    if not docx_path.exists() or docx_path.stat().st_size == 0:
-        raise IOError(f"Failed to write DOCX file: {docx_path}")
-
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(extracted_json, f, indent=2, ensure_ascii=False)
-    if not json_path.exists() or json_path.stat().st_size == 0:
-        raise IOError(f"Failed to write JSON file: {json_path}")
+        json_bytes = json.dumps(extracted_json, indent=2, ensure_ascii=False).encode("utf-8")
+        _atomic_write_bytes(docx_path, docx_bytes, label="DOCX")
+        _atomic_write_bytes(json_path, json_bytes, label="JSON")
 
     return docx_path, json_path
 
@@ -4403,6 +4867,36 @@ def _sanitize_persisted_template_if_needed(kernel_id: str) -> Optional[Dict[str,
     except Exception as exc:
         _logger.warning("[Template] Could not read template DOCX %s: %s", docx_path, exc)
         return existing_json
+
+    if not zipfile.is_zipfile(io.BytesIO(docx_bytes)):
+        _quarantine_template_artifact(docx_path, reason="invalid_docx_zip")
+        if not _regenerate_clean_template_docx(docx_path):
+            return existing_json
+        try:
+            regenerated_bytes = docx_path.read_bytes()
+            regenerated_json = extract_styles_from_docx(regenerated_bytes)
+            previous_slots = (
+                copy.deepcopy(existing_json.get(SEMANTIC_STYLE_SLOTS_KEY))
+                if isinstance(existing_json, dict) and isinstance(existing_json.get(SEMANTIC_STYLE_SLOTS_KEY), dict)
+                else None
+            )
+            regenerated_json = _merge_runtime_defaults_into_extracted(
+                regenerated_json,
+                previous_slots=previous_slots,
+            )
+            regenerated_json.setdefault("metadata", {})
+            if isinstance(regenerated_json.get("metadata"), dict):
+                regenerated_json["metadata"]["recovered_from_corrupt_docx"] = True
+            _write_template_files(kernel_id, regenerated_bytes, regenerated_json)
+            clear_preview_cache(kernel_id)
+            return regenerated_json
+        except Exception as exc:
+            _logger.warning(
+                "[Template] Regenerated DOCX for kernel %s but could not re-extract template JSON: %s",
+                kernel_id,
+                exc,
+            )
+            return existing_json
 
     try:
         prepared_docx, prepared_json, docx_changed = _prepare_template_payload(docx_bytes, existing_json)
@@ -4535,12 +5029,9 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
         if style.type not in (WD_STYLE_TYPE.PARAGRAPH, WD_STYLE_TYPE.CHARACTER, WD_STYLE_TYPE.TABLE):
             continue
         
-        # Skip hidden/internal styles unless they're priority ones or table styles
-        # Table styles are often marked hidden but should be included for editing
+        # Hidden/internal styles are extracted too; the frontend filters them by default
+        # and can reveal them with the Word-complete visibility toggle.
         is_priority = style.name in priority_styles or style.name in table_priority_styles
-        is_table_style = style.type == WD_STYLE_TYPE.TABLE
-        if style.hidden and not is_priority and not is_table_style:
-            continue
         
         # Determine style type string
         if style.type == WD_STYLE_TYPE.TABLE:
@@ -4557,6 +5048,8 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
             "base_style": style.base_style.name if style.base_style else None,
             "priority": style.name in priority_styles or style.name in table_priority_styles,
             "style_id": getattr(style, "style_id", None),
+            "hidden": bool(getattr(style, "hidden", False)),
+            "quick_style": bool(getattr(style, "quick_style", False)),
         }
         
         # Font information (table styles may not have font property)
@@ -4669,6 +5162,12 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
                 "base_style": table_style.get("based_on"),
                 "priority": style_id == "TableGrid",
                 "style_id": style_id,
+                "hidden": bool(table_style.get("hidden")),
+                "semi_hidden": bool(table_style.get("semi_hidden")),
+                "q_format": bool(table_style.get("q_format")),
+                "unhide_when_used": bool(table_style.get("unhide_when_used")),
+                "style_visibility": copy.deepcopy(table_style.get("style_visibility") or {}),
+                "word_style": copy.deepcopy(table_style.get("word_style") or {}),
                 "font": {},
                 "paragraph_format": {},
             })
@@ -4678,6 +5177,13 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
     # -------------------------------------------------------------------------
     style_prop_maps = _build_style_prop_maps(xml_details)
     list_info_map = _build_list_info_map(xml_details)
+    xml_style_details_by_key: Dict[str, Dict[str, Any]] = {}
+    for xml_style in xml_details.get("styles") or []:
+        if not isinstance(xml_style, dict):
+            continue
+        for key in (xml_style.get("style_id"), xml_style.get("display_name")):
+            if key:
+                xml_style_details_by_key[str(key)] = xml_style
 
     for style_info in result["styles"]:
         keys = [
@@ -4697,6 +5203,29 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
                 resolved = style_prop_maps.get("resolved", {}).get(key)
             if list_info is None:
                 list_info = list_info_map.get(key)
+        xml_style_detail = None
+        for key in keys:
+            if key and xml_style_details_by_key.get(str(key)):
+                xml_style_detail = xml_style_details_by_key.get(str(key))
+                break
+        if xml_style_detail:
+            for meta_key in (
+                "based_on",
+                "next",
+                "link",
+                "ui_priority",
+                "default",
+                "custom",
+                "hidden",
+                "semi_hidden",
+                "q_format",
+                "unhide_when_used",
+                "outline_level",
+                "style_visibility",
+                "word_style",
+            ):
+                if meta_key in xml_style_detail:
+                    style_info[meta_key] = copy.deepcopy(xml_style_detail.get(meta_key))
         if explicit:
             xml_font = explicit.get("font")
             mapped_xml_font = _map_xml_font_props(xml_font)
@@ -4853,12 +5382,72 @@ _TABLE_BLOCK_KEY_MAP = {
 }
 
 
+_WORD_STYLE_LIST_KEY_MAP = {
+    "format": "list_format",
+    "list_format": "list_format",
+    "bullet_char": "list_bullet_char",
+    "list_bullet_char": "list_bullet_char",
+    "start": "list_start",
+    "list_start": "list_start",
+    "level": "list_level",
+    "list_level": "list_level",
+    "alignment": "list_alignment",
+    "list_alignment": "list_alignment",
+    "left_indent_inches": "list_left_indent_inches",
+    "list_left_indent_inches": "list_left_indent_inches",
+    "hanging_indent_inches": "list_hanging_indent_inches",
+    "list_hanging_indent_inches": "list_hanging_indent_inches",
+}
+
+
+def _merge_advanced_props(current: Any, incoming: Any) -> Dict[str, Any]:
+    merged = copy.deepcopy(current) if isinstance(current, dict) else {}
+    if isinstance(incoming, dict):
+        for key, value in incoming.items():
+            if isinstance(key, str) and key:
+                merged[key] = copy.deepcopy(value)
+    return merged
+
+
 def _normalize_style_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize legacy flat updates and nested block updates into flat keys."""
     if not isinstance(updates, dict):
         return {}
 
     normalized: Dict[str, Any] = dict(updates)
+
+    word_style = updates.get("word_style")
+    if isinstance(word_style, dict):
+        for block_name in ("font", "run", "paragraph"):
+            block = word_style.get(block_name)
+            if isinstance(block, dict):
+                for key, value in block.items():
+                    if isinstance(key, str) and key and key not in normalized:
+                        normalized[key] = copy.deepcopy(value)
+
+        list_block = word_style.get("list")
+        if isinstance(list_block, dict):
+            for key, value in list_block.items():
+                mapped_key = _WORD_STYLE_LIST_KEY_MAP.get(str(key))
+                if mapped_key:
+                    normalized[mapped_key] = copy.deepcopy(value)
+
+        table_block_from_word = word_style.get("table")
+        if isinstance(table_block_from_word, dict):
+            merged_table = dict(updates.get("table") or {})
+            merged_table.update(table_block_from_word)
+            normalized["table"] = merged_table
+
+        metadata_block = word_style.get("metadata")
+        visibility_block = word_style.get("visibility")
+        if isinstance(metadata_block, dict):
+            normalized["_word_style_metadata"] = copy.deepcopy(metadata_block)
+        if isinstance(visibility_block, dict):
+            normalized["style_visibility"] = copy.deepcopy(visibility_block)
+
+        raw_block = word_style.get("raw") or word_style.get("advanced_props")
+        if isinstance(raw_block, dict):
+            normalized["advanced_props"] = _merge_advanced_props(normalized.get("advanced_props"), raw_block)
 
     for block_name in ("font", "paragraph"):
         block = updates.get(block_name)
@@ -4877,6 +5466,19 @@ def _normalize_style_updates(updates: Dict[str, Any]) -> Dict[str, Any]:
                 normalized[mapped_key] = value
             elif key.startswith("table_"):
                 normalized[key] = value
+
+    word_defaults = updates.get("word_defaults")
+    if isinstance(word_defaults, dict):
+        run_defaults = word_defaults.get("run") or word_defaults.get("font")
+        paragraph_defaults = word_defaults.get("paragraph")
+        if isinstance(run_defaults, dict):
+            for key, value in run_defaults.items():
+                if isinstance(key, str) and key:
+                    normalized[key] = copy.deepcopy(value)
+        if isinstance(paragraph_defaults, dict):
+            for key, value in paragraph_defaults.items():
+                if isinstance(key, str) and key:
+                    normalized[key] = copy.deepcopy(value)
 
     return normalized
 
@@ -5016,8 +5618,12 @@ def update_template_document_defaults(
         with open(docx_path, "rb") as f:
             new_docx_bytes = f.read()
         extracted = extract_styles_from_docx(new_docx_bytes)
+        current_slots = current_template.get(SEMANTIC_STYLE_SLOTS_KEY)
+        if isinstance(current_slots, dict):
+            extracted[SEMANTIC_STYLE_SLOTS_KEY] = copy.deepcopy(current_slots)
         extracted["style_coverage"] = get_style_coverage(extracted)
         save_template(kernel_id, new_docx_bytes, extracted)
+        updated_template = get_template(kernel_id) or extracted
 
         try:
             backup_docx.unlink()
@@ -5027,7 +5633,7 @@ def update_template_document_defaults(
             _logger.warning("[Template] Could not cleanup backup: %s", cleanup_err)
 
         _logger.info("[Template] Successfully updated document defaults for kernel %s", kernel_id)
-        return extracted
+        return updated_template
     except Exception as exc:
         _logger.error(
             "[Template] Error updating document defaults for kernel %s: %s. Rolling back to backup.",
@@ -5210,6 +5816,9 @@ def update_template_style(
         with open(docx_path, "rb") as f:
             new_docx_bytes = f.read()
         extracted = extract_styles_from_docx(new_docx_bytes)
+        current_slots = current_template.get(SEMANTIC_STYLE_SLOTS_KEY)
+        if isinstance(current_slots, dict):
+            extracted[SEMANTIC_STYLE_SLOTS_KEY] = copy.deepcopy(current_slots)
 
         updated_style_info = _find_template_style_info(extracted, style_name, current_style_id)
         effective_style_id = current_style_id or (updated_style_info or {}).get("style_id")
@@ -5231,6 +5840,7 @@ def update_template_style(
 
         extracted["style_coverage"] = get_style_coverage(extracted)
         save_template(kernel_id, new_docx_bytes, extracted)
+        updated_template = get_template(kernel_id) or extracted
 
         # Success - cleanup backup
         try:
@@ -5241,7 +5851,7 @@ def update_template_style(
             _logger.warning(f"[Template] Could not cleanup backup: {cleanup_err}")
 
         _logger.info(f"[Template] Successfully updated style '{style_name}' for kernel {kernel_id}")
-        return extracted
+        return updated_template
         
     except Exception as exc:
         # FIX #8: Rollback on error
@@ -5476,6 +6086,8 @@ def _apply_style_to_docx(docx_path: Path, style_name: str, updates: Dict[str, An
 
         if advanced_props:
             advanced_runtime_patch = _apply_style_xml_updates(docx_path, style_name, style_id, advanced_props)
+
+        _apply_word_style_xml_updates(docx_path, style_name, style_id, updates)
 
         if outline_level is not None:
             _apply_outline_level(docx_path, style_name, style_id, outline_value)
@@ -6024,42 +6636,47 @@ def _extract_preview_table_runtime_defaults(style_props: Optional[Dict[str, Any]
 def _apply_table_runtime_defaults_to_preview_table(table: Any, runtime_defaults: Optional[Dict[str, Any]]) -> None:
     if not runtime_defaults or not isinstance(runtime_defaults, dict):
         return
+    if OxmlElement is None or docx_qn is None:
+        return
 
     try:
         tbl = table._tbl
-        tbl_pr = tbl.find(_qn("w", "tblPr"))
+        tbl_pr = tbl.find(docx_qn("w:tblPr"))
         if tbl_pr is None:
-            tbl_pr = ET.SubElement(tbl, _qn("w", "tblPr"))
+            tbl_pr = OxmlElement("w:tblPr")
             tbl.insert(0, tbl_pr)
 
         for tag in _TABLE_STYLE_RUNTIME_TAGS:
-            existing = tbl_pr.find(_qn("w", tag))
+            existing = tbl_pr.find(docx_qn(f"w:{tag}"))
             if existing is not None:
                 tbl_pr.remove(existing)
 
         look = runtime_defaults.get("look")
         if isinstance(look, dict) and look:
-            tbl_look = ET.SubElement(tbl_pr, _qn("w", "tblLook"))
+            tbl_look = OxmlElement("w:tblLook")
+            tbl_pr.append(tbl_look)
             for key, default_value in _TABLE_LOOK_DEFAULTS.items():
                 bool_value = _coerce_boolish(look.get(key))
                 resolved_bool = default_value if bool_value is None else bool_value
-                tbl_look.set(_qn("w", key), "1" if resolved_bool else "0")
+                tbl_look.set(docx_qn(f"w:{key}"), "1" if resolved_bool else "0")
 
         layout_type = runtime_defaults.get("layout_type")
         if layout_type not in (None, ""):
-            tbl_layout = ET.SubElement(tbl_pr, _qn("w", "tblLayout"))
-            tbl_layout.set(_qn("w", "type"), str(layout_type).strip().lower())
+            tbl_layout = OxmlElement("w:tblLayout")
+            tbl_pr.append(tbl_layout)
+            tbl_layout.set(docx_qn("w:type"), str(layout_type).strip().lower())
 
         width_type = runtime_defaults.get("width_type")
         width_value = runtime_defaults.get("width_value")
         if width_type not in (None, "") or width_value not in (None, ""):
-            tbl_w = ET.SubElement(tbl_pr, _qn("w", "tblW"))
+            tbl_w = OxmlElement("w:tblW")
+            tbl_pr.append(tbl_w)
             resolved_width_type = str(width_type or "auto").strip().lower()
-            tbl_w.set(_qn("w", "type"), resolved_width_type)
+            tbl_w.set(docx_qn("w:type"), resolved_width_type)
             if resolved_width_type == "auto":
-                tbl_w.set(_qn("w", "w"), "0")
+                tbl_w.set(docx_qn("w:w"), "0")
             else:
-                tbl_w.set(_qn("w", "w"), str(_coerce_optional_int(width_value) or 0))
+                tbl_w.set(docx_qn("w:w"), str(_coerce_optional_int(width_value) or 0))
     except Exception as exc:
         _logger.warning("[Template] Could not apply preview table runtime defaults: %s", exc)
 
@@ -6164,15 +6781,26 @@ def generate_style_preview(
     if not HAS_DOCX:
         _logger.error("[Template] python-docx not installed")
         return None
+    if not isinstance(style_props, dict):
+        style_props = {}
     
     # Import pdf_converter for Word conversion
     try:
-        from app.services.pdf_converter import _convert_to_pdf_word, MS_WORD_AVAILABLE
+        from app.services.pdf_converter import MS_WORD_AVAILABLE
     except ImportError:
         _logger.error("[Template] pdf_converter not available")
         return None
     
-    if not MS_WORD_AVAILABLE:
+    preview_engine = str(style_props.get("_preview_engine") or style_props.get("preview_engine") or "").strip().lower()
+    native_word_preview = (
+        style_props.get("native_word_preview") is True
+        or preview_engine in {"word_native", "native_word", "word"}
+    )
+
+    if native_word_preview and not MS_WORD_AVAILABLE:
+        _logger.warning("[Template] Microsoft Word not available for native Word preview")
+        return None
+    if not native_word_preview and not MS_WORD_AVAILABLE:
         _logger.warning("[Template] Microsoft Word not available for preview; trying fallback")
     
     import tempfile
@@ -6465,13 +7093,29 @@ def generate_style_preview(
             
         docx_b64 = base64.b64encode(docx_bytes).decode("utf-8")
         
-        # Import generic converter to enable LibreOffice fallback
-        from app.services.pdf_converter import convert_docx_with_diagnostics
-        
-        # Attempt conversion with 15s timeout
-        result = convert_docx_with_diagnostics(docx_b64, timeout_s=15)
-        
-        pdf_b64 = result.get("pdf_b64")
+        if native_word_preview:
+            from app.services.pdf_converter import _convert_to_pdf_word_with_timeout, _word_conversion_lock
+
+            pdf_path = temp_path / "preview.pdf"
+            with _word_conversion_lock:
+                result = _convert_to_pdf_word_with_timeout(str(docx_path), str(pdf_path), 15)
+            if result.get("success"):
+                try:
+                    pdf_b64 = base64.b64encode(pdf_path.read_bytes()).decode("utf-8")
+                    result = {**result, "converter_used": "word_native", "pdf_b64": pdf_b64}
+                except Exception as exc:
+                    result = {"success": False, "error": f"pdf_read_error:{exc}", "converter_used": "word_native"}
+                    pdf_b64 = None
+            else:
+                pdf_b64 = None
+        else:
+            # Import generic converter to enable LibreOffice fallback
+            from app.services.pdf_converter import convert_docx_with_diagnostics
+
+            # Attempt conversion with 15s timeout
+            result = convert_docx_with_diagnostics(docx_b64, timeout_s=15)
+            pdf_b64 = result.get("pdf_b64")
+
         if not pdf_b64:
             _logger.warning(f"[Template] Preview conversion failed: {result.get('error')} (used: {result.get('converter_used')})")
             return None
@@ -7032,29 +7676,153 @@ def _extract_table_format_for_style(table_info: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def _apply_table_properties_to_style_tblpr(tbl_pr: ET.Element, table_format: Dict[str, Any]) -> None:
-    # Remove existing elements we actively regenerate from direct-format source
-    for tag in ("tblBorders", "shd", "tblCellMar", "jc", "tblCellSpacing", "tblInd", "tblW", "tblLayout", "tblLook"):
+def _has_table_format_value(value: Any) -> bool:
+    if value in (None, ""):
+        return False
+    if isinstance(value, (dict, list, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _has_first_row_format(first_row_format: Any) -> bool:
+    if not isinstance(first_row_format, dict):
+        return False
+    sample_cell = first_row_format.get("sample_cell") or {}
+    font_props = first_row_format.get("font_properties") or {}
+    return bool(
+        first_row_format.get("shading_fill")
+        or first_row_format.get("borders")
+        or first_row_format.get("margins")
+        or first_row_format.get("vertical_align")
+        or (isinstance(sample_cell, dict) and any(
+            _has_table_format_value(sample_cell.get(key))
+            for key in ("shading_color", "borders", "margins", "vertical_align")
+        ))
+        or _has_meaningful_font_props(font_props)
+    )
+
+
+def _merge_table_format(base: Optional[Dict[str, Any]], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    if not isinstance(override, dict):
+        return merged
+
+    for key, value in override.items():
+        if key == "has_distinct_header":
+            if value:
+                merged[key] = True
+            elif key not in merged:
+                merged[key] = False
+            continue
+        if key == "first_row_format":
+            if _has_first_row_format(value):
+                merged[key] = copy.deepcopy(value)
+            elif key not in merged:
+                merged[key] = {}
+            continue
+        if _has_table_format_value(value):
+            merged[key] = copy.deepcopy(value)
+        elif key not in merged:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _extract_table_format_from_style_element(style_elem: Optional[ET.Element]) -> Dict[str, Any]:
+    if style_elem is None:
+        return {}
+
+    style_info = _parse_style_element(style_elem)
+    parsed_tbl_pr = _parse_tblpr_nodes(style_info.get("tbl_pr"))
+    table_format: Dict[str, Any] = {
+        "borders": parsed_tbl_pr.get("borders") or {},
+        "shading_color": parsed_tbl_pr.get("shading_color"),
+        "cell_margins": parsed_tbl_pr.get("cell_margins") or {},
+        "alignment": parsed_tbl_pr.get("alignment"),
+        "width_type": parsed_tbl_pr.get("width_type"),
+        "width_value": parsed_tbl_pr.get("width_value"),
+        "layout_type": parsed_tbl_pr.get("layout_type"),
+        "cell_spacing_pt": parsed_tbl_pr.get("cell_spacing_pt"),
+        "indent_pt": parsed_tbl_pr.get("indent_pt"),
+        "look": parsed_tbl_pr.get("look") or {},
+        "first_row_format": {},
+        "has_distinct_header": False,
+    }
+
+    for raw_variant in style_info.get("tbl_style_pr") or []:
+        if raw_variant.get("type") != "firstRow":
+            continue
+        parsed_variant = _parse_tbl_style_variant(raw_variant)
+        cell_props = parsed_variant.get("cell") or {}
+        font_props = parsed_variant.get("font") or {}
+        first_row_format = {
+            "sample_cell": cell_props,
+            "font_properties": font_props,
+            "shading_fill": cell_props.get("shading_color"),
+            "borders": cell_props.get("borders"),
+            "margins": cell_props.get("margins"),
+            "vertical_align": cell_props.get("vertical_align"),
+        }
+        if _has_first_row_format(first_row_format):
+            table_format["first_row_format"] = first_row_format
+            table_format["has_distinct_header"] = True
+        break
+
+    return table_format
+
+
+def _resolve_table_style_format(
+    styles_root: ET.Element,
+    table_info: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not isinstance(table_info, dict):
+        return {}
+    source_style_id = table_info.get("style_id")
+    source_style_name = table_info.get("style_name") or table_info.get("style_display_name")
+    if not source_style_id and not source_style_name:
+        return {}
+    source_style = _find_style_element(styles_root, source_style_name, source_style_id)
+    return _extract_table_format_from_style_element(source_style)
+
+
+def _apply_table_properties_to_style_tblpr(
+    tbl_pr: ET.Element,
+    table_format: Dict[str, Any],
+    *,
+    preserve_missing: bool = False,
+) -> None:
+    def _remove_existing(tag: str) -> None:
         for old in list(tbl_pr.findall(f"w:{tag}", DOCX_NS)):
             tbl_pr.remove(old)
 
-    _append_table_borders(tbl_pr, "tblBorders", table_format.get("borders") or {})
+    borders = table_format.get("borders") or {}
+    if borders or not preserve_missing:
+        _remove_existing("tblBorders")
+        _append_table_borders(tbl_pr, "tblBorders", borders)
 
     shading_color = _normalize_ooxml_color(table_format.get("shading_color"))
+    if shading_color or not preserve_missing:
+        _remove_existing("shd")
     if shading_color:
         shd = ET.SubElement(tbl_pr, _qn("w", "shd"))
         shd.set(_qn("w", "val"), "clear")
         shd.set(_qn("w", "color"), "auto")
         shd.set(_qn("w", "fill"), shading_color)
 
-    _append_cell_margins(tbl_pr, table_format.get("cell_margins") or {}, "tblCellMar")
+    cell_margins = table_format.get("cell_margins") or {}
+    if cell_margins or not preserve_missing:
+        _remove_existing("tblCellMar")
+        _append_cell_margins(tbl_pr, cell_margins, "tblCellMar")
 
     alignment = table_format.get("alignment")
+    if alignment or not preserve_missing:
+        _remove_existing("jc")
     if alignment:
         jc = ET.SubElement(tbl_pr, _qn("w", "jc"))
         jc.set(_qn("w", "val"), str(alignment).lower())
 
     spacing_pt = table_format.get("cell_spacing_pt")
+    if spacing_pt not in (None, "") or not preserve_missing:
+        _remove_existing("tblCellSpacing")
     if spacing_pt not in (None, ""):
         try:
             spacing_twips = int(round(float(spacing_pt) * 20))
@@ -7065,6 +7833,8 @@ def _apply_table_properties_to_style_tblpr(tbl_pr: ET.Element, table_format: Dic
             pass
 
     indent_pt = table_format.get("indent_pt")
+    if indent_pt not in (None, "") or not preserve_missing:
+        _remove_existing("tblInd")
     if indent_pt not in (None, ""):
         try:
             indent_twips = int(round(float(indent_pt) * 20))
@@ -7073,6 +7843,15 @@ def _apply_table_properties_to_style_tblpr(tbl_pr: ET.Element, table_format: Dic
             tbl_ind.set(_qn("w", "type"), "dxa")
         except (TypeError, ValueError):
             pass
+
+    # Runtime-only table defaults are persisted outside styles.xml.
+    for runtime_tag, format_key in (
+        ("tblW", "width_type"),
+        ("tblLayout", "layout_type"),
+        ("tblLook", "look"),
+    ):
+        if _has_table_format_value(table_format.get(format_key)) or not preserve_missing:
+            _remove_existing(runtime_tag)
 
 
 
@@ -7179,6 +7958,9 @@ def create_table_style_from_format(
             return None
             
         styles_root = ET.fromstring(styles_xml)
+        source_style_format = _resolve_table_style_format(styles_root, target_table)
+        table_format = _merge_table_format(source_style_format, table_format)
+        runtime_patch = _extract_runtime_defaults_from_table_format(table_format)
         
         # 3. Create new style element
         # Clean name for ID
@@ -7309,6 +8091,9 @@ def apply_table_format_to_style(
             return None
             
         styles_root = ET.fromstring(styles_xml)
+        source_style_format = _resolve_table_style_format(styles_root, target_table)
+        table_format = _merge_table_format(source_style_format, table_format)
+        runtime_patch = _extract_runtime_defaults_from_table_format(table_format)
         
         # 3. Find existing style by name
         existing_style = _find_style_element(styles_root, target_style_name, target_style_id)
@@ -7331,7 +8116,7 @@ def apply_table_format_to_style(
         tbl_pr = existing_style.find(_qn("w", "tblPr"))
         if tbl_pr is None:
             tbl_pr = ET.SubElement(existing_style, _qn("w", "tblPr"))
-        _apply_table_properties_to_style_tblpr(tbl_pr, table_format)
+        _apply_table_properties_to_style_tblpr(tbl_pr, table_format, preserve_missing=True)
         _apply_first_row_variant(existing_style, table_format)
 
         # 6. Save and re-extract

@@ -310,7 +310,7 @@ async def test_execute_cell_emits_inline_docx_artifact_for_mirror(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_execute_all_cells_uses_batch_docx_strategy_and_only_final_pdf(monkeypatch):
+async def test_execute_all_cells_emits_docx_only_for_document_cells(monkeypatch):
     fake_activity_reporter = FakeReporter()
     fake_mirror_reporter = FakeReporter()
     notebook_path = os.path.abspath("C:/workspace/demo.ipynb")
@@ -367,9 +367,9 @@ async def test_execute_all_cells_uses_batch_docx_strategy_and_only_final_pdf(mon
     assert first_payload["cell_type"] == "docx"
     assert second_payload["cell_type"] == "code"
     assert first_payload["emit_docx"] is True
-    assert second_payload["emit_docx"] is True
-    assert first_payload["skip_pdf"] is True
-    assert second_payload["skip_pdf"] is False
+    assert second_payload["emit_docx"] is False
+    assert first_payload["skip_pdf"] is False
+    assert second_payload["skip_pdf"] is True
 
 
 @pytest.mark.asyncio
@@ -484,7 +484,8 @@ async def test_notebook_sync_cells_accepts_docx_cell_type(monkeypatch):
     assert result["cells"][0]["type"] == "docx"
     assert result["created_cell_ids"] == ["cell-docx"]
     written_payload = bridge.rest_post_calls[-1][1]
-    assert written_payload["content"]["cells"][0]["cell_type"] == "docx"
+    assert written_payload["content"]["cells"][0]["cell_type"] == "code"
+    assert written_payload["content"]["cells"][0]["metadata"]["inspyro"]["cell_kind"] == "docx"
 
 
 @pytest.mark.asyncio

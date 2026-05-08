@@ -1,6 +1,6 @@
 {
   "name": "inspyro-frontend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "dependencies": {
     "@fontsource/source-code-pro": "^5.2.7",

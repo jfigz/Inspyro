@@ -1,8 +1,0 @@
-{
-  "project": "Example Beam Report",
-  "span_m": 6.0,
-  "dead_load_kN_m": 8.0,
-  "live_load_kN_m": 5.0,
-  "steel_yield_MPa": 250.0,
-  "section_modulus_cm3": 720.0
-}

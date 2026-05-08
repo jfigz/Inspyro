@@ -137,6 +137,7 @@ def _render_manifest() -> str:
                 "Artifact resource_uri is session-scoped; portable_resource_uri is token-backed and reusable across MCP sessions while the token remains valid.",
                 "Use export_document_docx/export_document_pdf when the client needs a stable local file path inside the exposed MCP roots.",
                 "Use prepare_document_delivery for the final clean deliverable; it never replaces the original artifact.",
+                "`source_path` in document-quality tools means the notebook/script origin that has Inspyro DOCX history; do not pass an exported `.docx` path there.",
                 "Use set_component_profile only when you need to expand from the default authoring surface into analysis, files, or admin tools.",
                 "Use `inspyro://session/notebooks` or `list_session_notebooks` to inspect the notebooks currently alive in this MCP session.",
                 "Notebook create/load/execute flows require `stateful-http` or `stdio`; they are intentionally rejected in `stateless-http`.",
@@ -316,6 +317,7 @@ START_HERE_GUIDE = _render_guide(
         - Si `get_system_info` o `inspyro://session/notebooks` reportan `notebook_session_mode=stateless-http`, no intentes crear/cargar/ejecutar notebooks: reinicia el servidor sin `--stateless-http` o usa `stdio`.
         - `missing_artifact`: intentaste pedir un DOCX/PDF sin haber ejecutado antes una celda que exporte documento.
         - `missing_quality`: existe el DOCX, pero no hay auditoria cacheada; repite `check_document_quality(run=true, profile="agent")` si quieres revisar calidad.
+        - `invalid_quality_selector`: pasaste una ruta `.docx` exportada como `source_path`; usa `artifact_id`, `kernel_id`, `execution_id` o el resultado de `prepare_document_delivery`.
         - `missing_notebook_session`: intentaste guardar o mover un kernel que no fue creado/cargado por MCP.
         - Para notebooks, prefiere `notebook_load`, `notebook_sync_cells` y `notebook_save` por sobre file tools genericos o JSON/`nbformat`,
           porque preservan mejor la semantica notebook-first y el estado asociado.
@@ -444,8 +446,9 @@ DOCX_QUICKSTART_GUIDE = _render_guide(
         - Si pides un PDF y no existe aun, primero recupera el DOCX y luego usa `reconvert_pdf` o `get_document_pdf`.
         - `build_doc` y `doc_reset` ya existen dentro del kernel; no asumas que debes crear wrappers externos.
         - `check_document_quality(run=false)` solo lee cache; si devuelve `missing_quality`, reintenta con `run=true`.
+        - En tools de calidad/Workbench, `source_path` identifica el origen con historial DOCX de Inspyro (notebook/script), no una copia `.docx` exportada.
         - Las operaciones visuales de Workbench retornan `resource_uri`, no imagen inline; abre el recurso solo si necesitas inspeccion visual.
-        - `render_manifest` no fuerza raster pesado si ya existe cache; `render_page` y `render_all_pages` preparan recursos visuales derivados de forma explicita.
+        - `render_manifest` no fuerza raster pesado si ya existe cache; `render_page` y `render_all_pages` preparan recursos visuales derivados de forma explicita y pueden incluir `pages_dir`/`local_path` como metadata local, manteniendo `resource_uri` como contrato principal.
         """
     ).strip(),
     next_step=(
@@ -487,7 +490,8 @@ ARTIFACT_LIFECYCLE_GUIDE = _render_guide(
         - Si tu cliente necesita persistir el archivo en una ruta local explicita, usa `export_document_docx` o `export_document_pdf`.
         - La auditoria y el Workbench DOCX no corren automaticamente tras cada export; el agente los dispara bajo demanda para evitar costo y ruido.
         - `check_document_quality` retorna `quality_status`, `score`, `counts`, `sections` y findings limitados; nunca retorna DOCX, PNG, XML raw ni base64.
-        - Las operaciones visuales de Workbench (`render_manifest`, `render_page`, `render_all_pages`, `clear_render_cache`) retornan estado/cache y handles; no devuelven PNG inline.
+        - En tools de calidad/Workbench, `source_path` identifica el origen con historial DOCX de Inspyro; una ruta local de una copia `.docx` exportada no es un selector valido.
+        - Las operaciones visuales de Workbench (`render_manifest`, `render_page`, `render_all_pages`, `clear_render_cache`) retornan estado/cache y handles; no devuelven PNG inline. Los manifests pueden incluir `pages_dir` y cada recurso/pagina puede incluir `local_path` validado bajo el cache visual.
         - `run_document_workbench`, `compare_document_versions`, `manage_document_review` y `prepare_document_delivery` retornan summaries compactos y handles `resource_uri`.
         - `get_document_docx(include_quality=true)` solo adjunta el summary compacto cacheado si existe; no ejecuta auditoria.
         - `prepare_document_delivery` y `export_clean_document_docx` crean copias nuevas dentro de roots MCP permitidos y nunca reemplazan el artefacto original.
@@ -498,6 +502,7 @@ ARTIFACT_LIFECYCLE_GUIDE = _render_guide(
         - `missing_artifact` en DOCX: ejecuta de nuevo una celda con `build_doc` o `doc_reset`.
         - `missing_artifact` en PDF: el DOCX existe pero el PDF aun no fue convertido; usa `reconvert_pdf`.
         - `missing_quality`: el DOCX existe pero no hay auditoria cacheada; corre `check_document_quality(run=true, profile="agent")`.
+        - `invalid_quality_selector`: `source_path` apunta a una copia `.docx` exportada; recupera el artefacto por `artifact_id`, `kernel_id`, `execution_id` o reusa la variante devuelta por `prepare_document_delivery`.
         - Si guardaste un notebook pero no ejecutaste ninguna celda DOCX en la sesion actual, no habra artefacto asociado.
         - Si perdiste `kernel_id`, vuelve a `notebook_load(path)` y repite la descarga.
         """

@@ -989,6 +989,10 @@ class HomeCompactStore:
 
         inventory_items: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
+        try:
+            from app.services import template_binding as template_binding_service
+        except Exception:
+            template_binding_service = None
         for discovered in discovery["items"]:
             notebook_path = _normalize_path(discovered.get("notebook_path"))
             if notebook_path is None:
@@ -996,6 +1000,14 @@ class HomeCompactStore:
             seen_paths.add(notebook_path)
             persisted = persisted_by_path.get(notebook_path) or {}
             runtime_entry = runtime_by_path.get(notebook_path) or {}
+            binding_status = None
+            if template_binding_service is not None:
+                try:
+                    binding_status = template_binding_service.inspect_notebook_template_binding(notebook_path)
+                except Exception:
+                    binding_status = None
+            binding_active = bool(binding_status and binding_status.get("status") not in {"none", None})
+            template_attached = binding_active or bool(persisted)
             inventory_items.append(
                 {
                     "notebook_path": notebook_path,
@@ -1007,7 +1019,12 @@ class HomeCompactStore:
                     "kernel_id": runtime_entry.get("kernel_id") or persisted.get("kernel_id"),
                     "runtime_state": runtime_entry.get("state"),
                     "runtime_updated_at": runtime_entry.get("updated_at"),
-                    "template_attached": bool(persisted),
+                    "template_attached": template_attached,
+                    "template_binding": binding_status,
+                    "template_binding_status": binding_status.get("status") if binding_status else None,
+                    "template_json_path": binding_status.get("template_json_path") if binding_status else None,
+                    "template_json_relpath": binding_status.get("template_json_relpath") if binding_status else None,
+                    "template_legacy": bool(persisted and not binding_active),
                     "template_hash": persisted.get("template_hash"),
                     "template_token": persisted.get("template_token"),
                     "template_mirror_path": persisted.get("template_mirror_path"),
@@ -1027,6 +1044,13 @@ class HomeCompactStore:
             if workspace_role == "internal":
                 continue
             runtime_entry = runtime_by_path.get(notebook_path) or {}
+            binding_status = None
+            if template_binding_service is not None and Path(notebook_path).exists():
+                try:
+                    binding_status = template_binding_service.inspect_notebook_template_binding(notebook_path)
+                except Exception:
+                    binding_status = None
+            binding_active = bool(binding_status and binding_status.get("status") not in {"none", None})
             inventory_items.append(
                 {
                     "notebook_path": notebook_path,
@@ -1039,6 +1063,11 @@ class HomeCompactStore:
                     "runtime_state": runtime_entry.get("state"),
                     "runtime_updated_at": runtime_entry.get("updated_at"),
                     "template_attached": True,
+                    "template_binding": binding_status,
+                    "template_binding_status": binding_status.get("status") if binding_status else None,
+                    "template_json_path": binding_status.get("template_json_path") if binding_status else None,
+                    "template_json_relpath": binding_status.get("template_json_relpath") if binding_status else None,
+                    "template_legacy": not binding_active,
                     "template_hash": persisted.get("template_hash"),
                     "template_token": persisted.get("template_token"),
                     "template_mirror_path": persisted.get("template_mirror_path"),

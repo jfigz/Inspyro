@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field
 
 from app.core.security import is_hidden_name, is_path_safe, should_ignore
 from app.services import workspace_service
+from app.services.notebook_cell_kinds import (
+    canonicalize_notebook_for_persistence,
+    validate_persisted_notebook,
+)
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -209,10 +213,8 @@ def _write_file_sync(path: Path, content: str | dict[str, Any]) -> dict[str, Any
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.suffix.lower() == ".ipynb" and isinstance(content, dict):
-        cells = content.get("cells", [])
-        for cell in cells:
-            if cell.get("cell_type") not in ("code", "markdown", "docx", "raw"):
-                cell["cell_type"] = "code"
+        content = canonicalize_notebook_for_persistence(content)
+        validate_persisted_notebook(content)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(content, handle, indent=2, ensure_ascii=False)
     else:

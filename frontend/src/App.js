@@ -889,6 +889,7 @@ const createEmptyNotebookSession = () => ({
   selectedCellId: null,
   templateInfo: null,
   templateBlob: null,
+  templateBinding: null,
   templateOpenRequest: null,
   lastTemplateAttach: null,
 });
@@ -968,6 +969,51 @@ export const shouldShowProjectLauncher = (workspaceSession, openFiles) => {
   const hasActiveWorkspace = Boolean(workspaceSession?.activeWorkspace);
   const hasOpenFiles = Array.isArray(openFiles) && openFiles.length > 0;
   return !hasActiveWorkspace && !hasOpenFiles;
+};
+
+const normalizeHomeTemplatePath = (value) => (
+  typeof value === 'string' && value.trim() ? value.trim() : null
+);
+
+const isDocxPath = (value) => (
+  typeof value === 'string' && value.trim().toLowerCase().endsWith('.docx')
+);
+
+const isJsonPath = (value) => (
+  typeof value === 'string' && value.trim().toLowerCase().endsWith('.json')
+);
+
+export const resolveHomeTemplateOpenPaths = (entry = null, fallbackNotebookPath = null) => {
+  const rawEntryPath = normalizeHomeTemplatePath(entry?.path);
+  const explicitNotebookPath = [
+    entry?.sourcePath,
+    entry?.source_path,
+    entry?.notebookPath,
+    entry?.notebook_path,
+  ].map(normalizeHomeTemplatePath).find(isNotebookPath) || null;
+  const notebookPath = explicitNotebookPath
+    || (isNotebookPath(rawEntryPath) ? rawEntryPath : null)
+    || (isNotebookPath(fallbackNotebookPath) ? normalizeHomeTemplatePath(fallbackNotebookPath) : null);
+  const templateMirrorPath = [
+    entry?.template_mirror_path,
+    entry?.templateMirrorPath,
+    entry?.template_path,
+    entry?.templatePath,
+    entry?.templateFilePath,
+    isDocxPath(rawEntryPath) ? rawEntryPath : null,
+  ].map(normalizeHomeTemplatePath).find(isDocxPath) || null;
+  const templateJsonPath = [
+    entry?.template_json_path,
+    entry?.templateJsonPath,
+    entry?.template_binding?.template_json_path,
+    entry?.templateBinding?.template_json_path,
+  ].map(normalizeHomeTemplatePath).find(isJsonPath) || null;
+
+  return {
+    notebookPath,
+    templateMirrorPath,
+    templateJsonPath,
+  };
 };
 
 const EMPTY_HOME_SUMMARY = Object.freeze({
@@ -1436,11 +1482,19 @@ const buildWorkspaceHomeData = ({
     const templateEntry = notebookKey ? (templateByPath.get(notebookKey) || null) : null;
     const latestDocx = item?.latest_docx_item || (notebookKey ? latestDocxByPath.get(notebookKey) : null) || null;
     const stateMeta = getHomeNotebookStateMeta(item?.state);
+    const normalizedState = String(item?.state || '').trim().toLowerCase();
+    const isActiveNotebookRuntime = normalizedState === 'running';
+    const isProblemNotebookRuntime = ['error', 'cancelled', 'interrupted'].includes(normalizedState);
     const sharedResource = getHomeNotebookSharedResource(item);
     const sharedResourceMessage = describePdfSharedResource(sharedResource);
     const stageLabel = formatHomeDocumentStage(item?.progress?.stage);
     const progressPercent = clampHomePercent(item?.progress?.percent ?? item?.progress_percent);
-    const progress = progressPercent !== null || item?.state === 'running'
+    const shouldShowNotebookProgress = Boolean(
+      isActiveNotebookRuntime
+      || isProblemNotebookRuntime
+      || sharedResource
+    );
+    const progress = shouldShowNotebookProgress
       ? {
         value: progressPercent ?? (sharedResource ? 80 : 8),
         max: 100,
@@ -1487,7 +1541,7 @@ const buildWorkspaceHomeData = ({
         createHomeDetail('Kernel', item?.kernel_id),
         createHomeDetail('Ultimo progreso', sharedResourceMessage || item?.progress?.message || item?.message || item?.progress?.status),
         createHomeDetail('Recurso compartido', sharedResourceMessage),
-        createHomeDetail('Plantilla', templateEntry?.template_mirror_relpath || item?.template_mirror_relpath || (templateEntry?.template_attached || item?.template_attached ? 'Adjunta' : 'Sin plantilla')),
+        createHomeDetail('Plantilla', templateEntry?.template_json_relpath || item?.template_json_relpath || templateEntry?.template_mirror_relpath || item?.template_mirror_relpath || (templateEntry?.template_attached || item?.template_attached ? 'Adjunta' : 'Sin plantilla')),
         createHomeDetail('Ultimo DOCX', latestDocx?.workspace_relpath || latestDocx?.docx_file_name || latestDocx?.docxFileName),
       ].filter(Boolean),
       actions: [
@@ -1500,8 +1554,11 @@ const buildWorkspaceHomeData = ({
   const codeRows = codeRuntimeItems.map((item, index) => {
     const filePath = item?.file_path || item?.path || item?.source_path || null;
     const stateMeta = getHomeNotebookStateMeta(item?.state);
+    const normalizedState = String(item?.state || '').trim().toLowerCase();
+    const isActiveCodeRuntime = normalizedState === 'running';
+    const isProblemCodeRuntime = ['error', 'cancelled', 'interrupted'].includes(normalizedState);
     const progressPercent = clampHomePercent(item?.progress?.percent ?? item?.progress_percent);
-    const progress = progressPercent !== null || item?.state === 'running'
+    const progress = isActiveCodeRuntime || isProblemCodeRuntime
       ? {
         value: progressPercent ?? 8,
         max: 100,
@@ -1654,6 +1711,16 @@ const buildWorkspaceHomeData = ({
       sourcePath: notebookPath,
       path: notebookPath,
     };
+    const bindingStatus = String(item?.template_binding_status || item?.template_binding?.status || '').toLowerCase();
+    const hasJsonBinding = bindingStatus && bindingStatus !== 'none';
+    const isLegacyTemplate = Boolean(item?.template_legacy || (!hasJsonBinding && item?.template_mirror_path));
+    const templateStatusBadge = bindingStatus === 'missing'
+      ? createHomeBadge('JSON perdido', 'warn')
+      : bindingStatus === 'error'
+        ? createHomeBadge('JSON con error', 'warn')
+        : hasJsonBinding
+          ? createHomeBadge('Plantilla JSON', 'good')
+          : createHomeBadge(item?.template_attached ? 'Plantilla legacy' : 'Sin plantilla', item?.template_attached ? 'neutral' : 'muted');
     return {
       id: item?.notebook_path || `template-${index}`,
       title: item?.notebook_relpath || getPathBasename(notebookPath) || `Notebook ${index + 1}`,
@@ -1664,7 +1731,7 @@ const buildWorkspaceHomeData = ({
           ? getHomeNotebookStateMeta(item.runtime_state).label
           : 'Sin actividad reciente',
       badges: [
-        createHomeBadge(item?.template_attached ? 'Plantilla adjunta' : 'Sin plantilla', item?.template_attached ? 'good' : 'muted'),
+        templateStatusBadge,
         item?.runtime_state ? createHomeBadge(getHomeNotebookStateMeta(item.runtime_state).label, getHomeNotebookStateMeta(item.runtime_state).tone) : null,
       ].filter(Boolean),
       target: item?.template_attached
@@ -1672,12 +1739,14 @@ const buildWorkspaceHomeData = ({
         : (notebookPayload ? createHomeTarget('notebook', notebookPayload) : null),
       details: [
         createHomeDetail('Notebook', notebookPath),
+        createHomeDetail('JSON', item?.template_json_relpath || item?.template_json_path),
         createHomeDetail('Espejo', item?.template_mirror_relpath || item?.template_mirror_path),
         createHomeDetail('Estilos', item?.style_count),
         createHomeDetail('Kernel', item?.kernel_id),
       ].filter(Boolean),
       actions: [
         createHomeAction('Abrir plantilla', createHomeTarget('template', templatePayload), 'primary'),
+        isLegacyTemplate ? createHomeAction('Migrar a JSON', createHomeTarget('template', { ...templatePayload, migrateTemplate: true }), 'secondary') : null,
         item?.template_attached && notebookPayload
           ? createHomeAction('Abrir notebook', createHomeTarget('notebook', notebookPayload), 'secondary')
           : null,
@@ -1710,6 +1779,16 @@ const buildWorkspaceHomeData = ({
         sourcePath: notebookPath,
         path: notebookPath,
       };
+      const bindingStatus = String(item?.template_binding_status || item?.template_binding?.status || '').toLowerCase();
+      const hasJsonBinding = bindingStatus && bindingStatus !== 'none';
+      const isLegacyTemplate = Boolean(item?.template_legacy || (!hasJsonBinding && item?.template_mirror_path));
+      const templateStatusBadge = bindingStatus === 'missing'
+        ? createHomeBadge('JSON perdido', 'warn')
+        : bindingStatus === 'error'
+          ? createHomeBadge('JSON con error', 'warn')
+          : hasJsonBinding
+            ? createHomeBadge('Plantilla JSON', 'good')
+            : createHomeBadge(item?.template_attached ? 'Plantilla legacy' : 'Sin plantilla', item?.template_attached ? 'neutral' : 'muted');
       const statusMeta = item?.runtime_state
         ? getHomeNotebookStateMeta(item.runtime_state)
         : { label: 'Listo para abrir', tone: 'neutral' };
@@ -1724,19 +1803,20 @@ const buildWorkspaceHomeData = ({
         meta: metaText,
         badges: [
           createHomeBadge('Inventariado', 'neutral'),
-          createHomeBadge(item?.template_attached ? 'Plantilla adjunta' : 'Sin plantilla', item?.template_attached ? 'good' : 'muted'),
+          templateStatusBadge,
           createHomeBadge(statusMeta.label, statusMeta.tone),
         ].filter(Boolean),
         target: notebookPayload ? createHomeTarget('notebook', notebookPayload) : null,
         details: [
           createHomeDetail('Ruta', notebookPath),
-          createHomeDetail('Plantilla', item?.template_mirror_relpath || item?.template_mirror_path || (item?.template_attached ? 'Adjunta' : 'Sin plantilla')),
+          createHomeDetail('Plantilla', item?.template_json_relpath || item?.template_json_path || item?.template_mirror_relpath || item?.template_mirror_path || (item?.template_attached ? 'Adjunta' : 'Sin plantilla')),
           createHomeDetail('Ultimo DOCX', latestDocx?.workspace_relpath || latestDocx?.docx_file_name || latestDocx?.docxFileName),
           createHomeDetail('Estilos', item?.style_count),
         ].filter(Boolean),
         actions: [
           notebookPayload ? createHomeAction('Abrir notebook', createHomeTarget('notebook', notebookPayload), 'primary') : null,
           item?.template_attached ? createHomeAction('Abrir plantilla', createHomeTarget('template', templatePayload), 'secondary') : null,
+          isLegacyTemplate ? createHomeAction('Migrar a JSON', createHomeTarget('template', { ...templatePayload, migrateTemplate: true }), 'secondary') : null,
         ].filter(Boolean),
       };
     });
@@ -2469,6 +2549,7 @@ function App() {
   const activeNotebookTransportPath = activeNotebookSessionPath || activeNotebookPath || activeFile?.path || null;
   const activeNotebookTemplateInfo = activeNotebookSession.templateInfo || null;
   const activeNotebookTemplateBlob = activeNotebookSession.templateBlob || null;
+  const activeNotebookTemplateBinding = activeNotebookSession.templateBinding || null;
   const activeNotebookTemplateOpenRequest = activeNotebookSession.templateOpenRequest || null;
   const activeNotebookConnectionStatus = activeNotebookSessionPath
     ? getNotebookConnectionStatusSafe(activeNotebookSessionPath)
@@ -3561,6 +3642,76 @@ function App() {
     refreshWorkspaceSession().catch(() => {});
   }, [refreshWorkspaceSession]);
 
+  const handleBindActiveTemplateToNotebook = useCallback(async () => {
+    const targetPath = activeNotebookTransportPath;
+    const kernelId = notebookKernelState?.kernelId;
+    if (!targetPath) {
+      handleStatusMessage('Guarda o abre el notebook antes de anidar la plantilla.', 'warning');
+      return null;
+    }
+    if (!kernelId) {
+      handleStatusMessage('Inicia el kernel del notebook antes de anidar la plantilla.', 'warning');
+      return null;
+    }
+    if (!activeNotebookTemplateInfo) {
+      handleStatusMessage('Carga una plantilla antes de anidarla al notebook.', 'warning');
+      return null;
+    }
+
+    const notebookPayload = (
+      notebookActionsRef.current?.getPersistableNotebook?.()
+      || activeRuntimeNotebook
+      || activeNotebookPersistedData
+      || null
+    );
+
+    let response;
+    try {
+      response = await fetch(`${API_BASE}/api/templates/bind`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kernel_id: kernelId,
+          notebook_path: targetPath,
+          notebook: notebookPayload,
+        }),
+      });
+    } catch (error) {
+      handleStatusMessage('No se pudo anidar la plantilla al notebook.', 'error');
+      return null;
+    }
+
+    if (!response.ok) {
+      const message = await readErrorMessage(response, 'No se pudo anidar la plantilla al notebook');
+      handleStatusMessage(typeof message === 'string' ? message : JSON.stringify(message), 'error');
+      return null;
+    }
+
+    const payload = await response.json();
+    const nextNotebook = payload?.notebook || notebookPayload;
+    if (nextNotebook) {
+      setNotebookRuntimeSnapshot(targetPath, nextNotebook, { source: 'runtime' });
+    }
+    updateNotebookSession(targetPath, (previous) => ({
+      ...previous,
+      templateBinding: payload?.template_binding || previous.templateBinding || null,
+      templateInfo: payload?.template_binding?.template || previous.templateInfo,
+    }));
+    handleStatusMessage('Plantilla JSON anidada al notebook', 'success');
+    triggerWorkspaceRefresh();
+    return payload;
+  }, [
+    activeNotebookPersistedData,
+    activeNotebookTemplateInfo,
+    activeNotebookTransportPath,
+    activeRuntimeNotebook,
+    handleStatusMessage,
+    notebookKernelState?.kernelId,
+    setNotebookRuntimeSnapshot,
+    triggerWorkspaceRefresh,
+    updateNotebookSession,
+  ]);
+
   useEffect(() => {
     workspaceConflictWarningPathsRef.current = pruneResolvedConflictPaths(
       workspaceConflictWarningPathsRef.current,
@@ -3757,6 +3908,12 @@ function App() {
             reason: 'binding_ack_matched',
           })
           : false;
+        if (Object.prototype.hasOwnProperty.call(message, 'template_binding')) {
+          updateNotebookSession(targetPath, (previous) => ({
+            ...previous,
+            templateBinding: message.template_binding || null,
+          }));
+        }
         if (!promotedBatch) {
           updateNotebookSession(targetPath, (previous) => ({
             ...previous,
@@ -3768,6 +3925,9 @@ function App() {
                   : previous.kernelBindingRequest.status,
               }
               : previous.kernelBindingRequest,
+            templateBinding: Object.prototype.hasOwnProperty.call(message, 'template_binding')
+              ? (message.template_binding || null)
+              : previous.templateBinding,
             kernelState: {
               ...createEmptyNotebookKernelState(),
               ...(previous.kernelState || {}),
@@ -3779,6 +3939,14 @@ function App() {
               hasNotebook: Boolean(message.notebook || previous.runtimeNotebook || previous.kernelState?.hasNotebook),
             },
           }));
+        }
+
+        const bindingStatus = message.template_binding?.status;
+        if (bindingStatus === 'missing' || bindingStatus === 'error') {
+          handleStatusMessage(
+            message.template_binding?.message || 'El notebook tiene una plantilla JSON vinculada, pero no se pudo aplicar.',
+            'warning',
+          );
         }
 
         const pendingExecution = getPendingNotebookExecution(targetPath);
@@ -5169,11 +5337,15 @@ function App() {
   }, []);
 
   const handleOpenTemplateFromHome = useCallback(async (entry = null) => {
-    const notebookPath = entry?.sourcePath
-      || entry?.source_path
-      || entry?.path
-      || getPreferredNotebookPath();
+    const {
+      notebookPath,
+      templateMirrorPath,
+      templateJsonPath,
+    } = resolveHomeTemplateOpenPaths(entry, getPreferredNotebookPath());
     if (!notebookPath) {
+      if (entry?.path || entry?.template_mirror_path || entry?.templateMirrorPath) {
+        handleStatusMessage('La plantilla persistida necesita un notebook origen para editarse desde Home.', 'warning');
+      }
       setMcpPanelOpen(true);
       return false;
     }
@@ -5186,14 +5358,22 @@ function App() {
       return false;
     }
 
-    const templateMirrorPath = entry?.template_mirror_path || entry?.templateMirrorPath || null;
-    let templateToken = entry?.template_token || entry?.templateToken || null;
-    if (templateMirrorPath) {
+    let templateToken = templateJsonPath ? null : (entry?.template_token || entry?.templateToken || null);
+    if (!templateJsonPath && templateMirrorPath) {
       try {
         templateToken = await tokenizeTemplateMirror(templateMirrorPath);
       } catch (error) {
         handleStatusMessage(error?.message || 'No se pudo reatachar el template del workspace', 'warning');
       }
+    }
+
+    if (!templateJsonPath && templateMirrorPath && !templateToken) {
+      updateNotebookSession(openedFile.path, (previous) => ({
+        ...previous,
+        templateBlob: null,
+        templateOpenRequest: null,
+      }));
+      return true;
     }
 
     if (templateToken) {
@@ -5215,12 +5395,16 @@ function App() {
     focusDocxView();
     updateNotebookSession(openedFile.path, (previous) => ({
       ...previous,
+      templateBinding: entry?.template_binding || entry?.templateBinding || previous.templateBinding || null,
       templateOpenRequest: {
         token: Date.now(),
         sourcePath: openedFile.path,
         entry: {
           ...entry,
           sourcePath: openedFile.path,
+          path: openedFile.path,
+          template_json_path: templateJsonPath || entry?.template_json_path || null,
+          template_mirror_path: templateToken ? templateMirrorPath : null,
           template_token: templateToken || entry?.template_token || entry?.templateToken || null,
         },
       },
@@ -5910,6 +6094,13 @@ function App() {
   }, [refreshHomeSummary, showWorkspaceHome]);
 
   useEffect(() => {
+    if (!showWorkspaceHome || lastMessage?.type !== 'mcp_activity_event') {
+      return;
+    }
+    refreshHomeSummary({ silent: true }).catch(() => {});
+  }, [lastMessage, refreshHomeSummary, showWorkspaceHome]);
+
+  useEffect(() => {
     if (!desktopApi?.reportWorkspace) {
       return;
     }
@@ -6504,6 +6695,7 @@ function App() {
       attachKey = `token:${activeNotebookTemplateBlob.templateToken}`;
       payload = {
         type: 'template_attach',
+        request_id: activeNotebookTemplateBlob.requestId || undefined,
         kernel_id: kid,
         template_token: activeNotebookTemplateBlob.templateToken,
         path: activeNotebookTransportPath,
@@ -6512,6 +6704,7 @@ function App() {
       attachKey = `legacy:${activeNotebookTemplateBlob.legacyBase64.length}`;
       payload = {
         type: 'template_upload',
+        request_id: activeNotebookTemplateBlob.requestId || undefined,
         kernel_id: kid,
         docx_base64: activeNotebookTemplateBlob.legacyBase64,
         path: activeNotebookTransportPath,
@@ -6532,22 +6725,30 @@ function App() {
     }
 
     const last = activeNotebookSession.lastTemplateAttach;
-    if (last?.kernelId === kid && last?.attachKey === attachKey) {
+    if (last?.kernelId === kid && last?.attachKey === attachKey && last?.status !== 'error') {
       return;
     }
 
+    const sent = sendMessage(payload);
+    if (sent === false) {
+      return;
+    }
     updateNotebookSession(activeNotebookTransportPath, (previous) => ({
       ...previous,
-      lastTemplateAttach: { kernelId: kid, attachKey },
+      lastTemplateAttach: {
+        kernelId: kid,
+        attachKey,
+        status: 'pending',
+        requestId: payload.request_id || null,
+      },
     }));
-    sendActiveNotebookMessage(payload);
   }, [
     activeNotebookConnectionStatus,
     activeNotebookSession.lastTemplateAttach,
     activeNotebookTemplateBlob,
     activeNotebookTransportPath,
     notebookKernelState.kernelId,
-    sendActiveNotebookMessage,
+    sendMessage,
     updateNotebookSession,
   ]);
 
@@ -6996,7 +7197,10 @@ function App() {
                         kernelId={notebookKernelState.kernelId}
                         sendMessage={sendActiveNotebookMessage}
                         lastMessage={activeNotebookLastMessage}
+                        templateSendMessage={sendMessage}
+                        templateLastMessage={lastMessage}
                         templateInfo={activeNotebookTemplateInfo}
+                        templateBinding={activeNotebookTemplateBinding}
                         onTemplateChange={(nextTemplateInfo) => {
                           if (!activeNotebookTransportPath) {
                             return;
@@ -7010,12 +7214,53 @@ function App() {
                           if (!activeNotebookTransportPath) {
                             return;
                           }
+                          const kid = notebookKernelState.kernelId;
+                          let attachKey = null;
+                          let payload = null;
+                          if (kid && nextTemplateBlob?.templateToken) {
+                            attachKey = `token:${nextTemplateBlob.templateToken}`;
+                            payload = {
+                              type: 'template_attach',
+                              request_id: nextTemplateBlob.requestId || undefined,
+                              kernel_id: kid,
+                              template_token: nextTemplateBlob.templateToken,
+                              path: activeNotebookTransportPath,
+                            };
+                          } else if (kid && nextTemplateBlob?.legacyBase64) {
+                            attachKey = `legacy:${nextTemplateBlob.legacyBase64.length}`;
+                            payload = {
+                              type: 'template_upload',
+                              request_id: nextTemplateBlob.requestId || undefined,
+                              kernel_id: kid,
+                              docx_base64: nextTemplateBlob.legacyBase64,
+                              path: activeNotebookTransportPath,
+                            };
+                          } else if (kid && typeof nextTemplateBlob === 'string') {
+                            attachKey = `legacy-string:${nextTemplateBlob.length}`;
+                            payload = {
+                              type: 'template_upload',
+                              kernel_id: kid,
+                              docx_base64: nextTemplateBlob,
+                              path: activeNotebookTransportPath,
+                            };
+                          }
+                          const sent = nextTemplateBlob?.attachSent
+                            ? true
+                            : (payload ? sendMessage(payload) !== false : false);
                           updateNotebookSession(activeNotebookTransportPath, (previous) => ({
                             ...previous,
                             templateBlob: nextTemplateBlob,
-                            lastTemplateAttach: null,
+                            lastTemplateAttach: sent && attachKey
+                              ? {
+                                kernelId: kid,
+                                attachKey,
+                                status: 'pending',
+                                requestId: payload?.request_id || nextTemplateBlob?.requestId || null,
+                              }
+                              : (previous.lastTemplateAttach || null),
                           }));
                         }}
+                        onTemplateBind={handleBindActiveTemplateToNotebook}
                         onDocumentVisibilityChange={handleDocumentVisibilityChange}
                         templateOpenRequest={activeNotebookTemplateOpenRequest}
                         onTemplateOpenHandled={(token) => {

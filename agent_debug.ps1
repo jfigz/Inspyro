@@ -1217,7 +1217,8 @@ function Run-VerifyFast {
         "-q",
         "tests/test_websocket_dispatcher_hardening.py",
         "tests/test_contract_sync_guard.py",
-        "tests/test_stress_ws_mix.py"
+        "tests/test_stress_ws_mix.py",
+        "tests/test_template_binding.py"
     )
     Run-FrontendCiTests
     Write-Host "verify-fast completed successfully."
@@ -1301,6 +1302,37 @@ function Run-PlaywrightE2E {
     Write-Host "playwright-e2e completed successfully."
 }
 
+function Run-FrontendTemplateBindingUnitTests {
+    $npmCmd = Resolve-NpmCmd
+    if (-not $npmCmd) {
+        throw "npm not found in PATH"
+    }
+
+    Push-Location (Join-Path $ProjectRoot "frontend")
+    $prevCi = $env:CI
+    try {
+        $env:CI = "true"
+        & $npmCmd test -- --watch=false --runInBand `
+            src/App.test.js `
+            src/components/template-editor/TemplateEditorContainer.test.js `
+            src/hooks/useTemplateMessageHandler.test.js
+        if ($LASTEXITCODE -ne 0) {
+            throw ("frontend template binding tests failed with exit code {0}" -f $LASTEXITCODE)
+        }
+    } finally {
+        if ($null -ne $prevCi) { $env:CI = $prevCi } else { Remove-Item Env:CI -ErrorAction SilentlyContinue }
+        Pop-Location
+    }
+}
+
+function Run-TemplateBindingBank {
+    Write-Host "Running template-binding-bank..."
+    Run-BackendPytest -PytestArgs @("-q", "tests/test_template_binding.py")
+    Run-FrontendTemplateBindingUnitTests
+    Run-PlaywrightE2E -ExtraArgs @("template-binding-bank.spec.ts")
+    Write-Host "template-binding-bank completed successfully. Reports: output/template-binding-bank/<run-id>/summary.json"
+}
+
 function Show-Help {
     Write-Host "AGENT DEBUG TOOLS (PowerShell 7+)"
     Write-Host "Usage: ./agent_debug.ps1 <command> [args] [-Debug]"
@@ -1321,6 +1353,7 @@ function Show-Help {
     Write-Host "  deps                      Install backend + frontend dependencies"
     Write-Host "  doctor                    Environment checks"
     Write-Host "  playwright-e2e [args]     Run Playwright suite with isolated sandbox harness"
+    Write-Host "  template-binding-bank     Backend/unit + Playwright/MCP bank for JSON template binding"
     Write-Host "  mcp-smoke                 initialize + tools/resources/prompts + get_health"
     Write-Host "  mcp-torture               exhaustive MCP notebook-first torture campaign"
     Write-Host "  docs-check                Validate docs (BOM, links, WS contracts, dates)"
@@ -1340,6 +1373,7 @@ function Show-Help {
     Write-Host "  ./agent_debug.ps1 bootstrap-agent             # Agent onboarding flow"
     Write-Host "  ./agent_debug.ps1 playwright-e2e              # Full Playwright suite in isolated sandbox"
     Write-Host "  ./agent_debug.ps1 playwright-e2e responsive-smoke.spec.ts"
+    Write-Host "  ./agent_debug.ps1 template-binding-bank       # Exhaustive JSON template binding bank"
     Write-Host "  ./agent_debug.ps1 mcp-smoke                  # MCP end-to-end smoke test"
     Write-Host "  ./agent_debug.ps1 mcp-torture --keep-artifacts"
     Write-Host "  ./agent_debug.ps1 verify-fast                 # Fast quality gate"
@@ -1376,6 +1410,7 @@ switch ($CommandLower) {
     "deps" { Install-Deps }
     "doctor" { Show-Doctor }
     "playwright-e2e" { Run-PlaywrightE2E -ExtraArgs $AllArgs }
+    "template-binding-bank" { Run-TemplateBindingBank }
     "mcp-smoke" { Run-McpSmoke }
     "mcp-torture" { Run-McpTorture }
     "docs-check" { Run-DocsCheck }

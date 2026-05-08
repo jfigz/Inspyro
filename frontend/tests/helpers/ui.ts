@@ -64,7 +64,9 @@ export const selectFolderInPicker = async (page: Page, folderName: string) => {
 
 export const selectWorkspaceInPicker = async (page: Page, workspaceName: string, maxLevels = 6) => {
   for (let level = 0; level <= maxLevels; level += 1) {
+    await expect(page.locator('.folder-loading').filter({ hasText: 'Cargando...' })).toHaveCount(0, { timeout: 5000 }).catch(() => {});
     const folderItem = page.getByTestId('folder-selector-item').filter({ hasText: workspaceName }).first();
+    await expect(folderItem).toBeVisible({ timeout: 2500 }).catch(() => {});
     if (await folderItem.isVisible().catch(() => false)) {
       await folderItem.click();
       return folderItem;
@@ -80,7 +82,7 @@ export const selectWorkspaceInPicker = async (page: Page, workspaceName: string,
       element.click();
     });
     await expect(currentPath).not.toHaveText(previousPath, { timeout: 5000 });
-    await page.waitForTimeout(150);
+    await expect(page.locator('.folder-loading').filter({ hasText: 'Cargando...' })).toHaveCount(0, { timeout: 5000 }).catch(() => {});
   }
 
   throw new Error(`No se encontró el workspace '${workspaceName}' en el selector.`);
@@ -166,23 +168,19 @@ export const getLastMonacoTextarea = (scope: Page | Locator) => (
   scope.locator('.monaco-editor textarea').last()
 );
 
-export const replaceMonacoValue = async (page: Page, textarea: Locator, nextValue: string) => {
-  await textarea.evaluate((element: HTMLTextAreaElement) => {
-    element.focus();
-  });
-  await page.keyboard.press('Control+A');
-  await page.keyboard.press('Backspace');
+export const replaceMonacoValue = async (_page: Page, textarea: Locator, nextValue: string) => {
+  await textarea.click({ force: true });
+  await textarea.press('Control+A');
+  await textarea.press('Backspace');
   if (nextValue) {
-    await page.keyboard.insertText(nextValue);
+    await textarea.type(nextValue);
   }
 };
 
-export const appendMonacoValue = async (page: Page, textarea: Locator, extraText: string) => {
-  await textarea.evaluate((element: HTMLTextAreaElement) => {
-    element.focus();
-  });
-  await page.keyboard.press('Control+End');
-  await page.keyboard.insertText(extraText);
+export const appendMonacoValue = async (_page: Page, textarea: Locator, extraText: string) => {
+  await textarea.click({ force: true });
+  await textarea.press('Control+End');
+  await textarea.type(extraText);
 };
 
 export const waitForNotification = async (page: Page, text: RegExp | string) => {

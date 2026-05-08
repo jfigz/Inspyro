@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from ..activity import mcp_activity_tool
 from ..bridge import BridgeError, InspyroBridge
@@ -101,6 +102,7 @@ async def upload_template(kernel_id: str, file_path: str) -> dict:
         "kernel_id": kernel_id,
         "template_token": result.get("template_token", template_token),
         "template": template,
+        "template_binding": result.get("template_binding"),
         "raw": result,
     }
 
@@ -134,6 +136,63 @@ async def get_template_info(kernel_id: str) -> dict:
         "status": "ok",
         "kernel_id": kernel_id,
         "template": template,
+        "template_binding": result.get("template_binding"),
+        "raw": result,
+    }
+
+
+@mcp_activity_tool("templates")
+async def bind_template_to_notebook(kernel_id: str, path: str | None = None, template_json_path: str | None = None) -> dict:
+    """Cuando usar: vincular la plantilla activa del kernel al `.ipynb` como JSON portable.
+
+    Prerrequisitos: `kernel_id` valido con plantilla activa; `path` puede omitirse si el kernel ya
+    esta registrado por `notebook_create`/`notebook_load`.
+    Resultado: escribe `<notebook_stem>.inspyro-template.json`, parchea metadata del notebook y
+    devuelve `template_binding` con estado `bound`.
+    Siguiente tool tipica: `notebook_load`, `update_template_style` o `execute_all_cells`.
+    """
+    bridge = InspyroBridge.get()
+    notebook_path = path or _SESSION_STATE.get_notebook_path(kernel_id)
+    if not notebook_path:
+        raise BridgeError(
+            "No notebook path registered for this kernel; pass path explicitly",
+            payload={
+                "type": "template_error",
+                "error_code": "missing_notebook_path",
+                "kernel_id": kernel_id,
+            },
+        )
+
+    payload: dict[str, Any] = {
+        "kernel_id": kernel_id,
+        "notebook_path": notebook_path,
+    }
+    if template_json_path:
+        payload["template_json_path"] = template_json_path
+
+    result = await bridge.rest_post("/api/templates/bind", json_data=payload)
+    template = result.get("template_binding", {}).get("template")
+    if template is None:
+        template = (result.get("raw") or {}).get("template")
+    if template is not None:
+        _SESSION_STATE.record_template(kernel_id, template)
+    _SESSION_STATE.register_notebook(kernel_id, result.get("template_binding", {}).get("notebook_path") or notebook_path)
+
+    notebook_result_path = result.get("template_binding", {}).get("notebook_path") or notebook_path
+    await emit_open_resource(notebook_result_path, focus_view="docx", resource={"kernel_id": kernel_id})
+    await emit_template_snapshot(
+        kernel_id=kernel_id,
+        notebook_path=notebook_result_path,
+        template=template,
+        template_token=None,
+    )
+    return {
+        "status": "bound",
+        "kernel_id": kernel_id,
+        "path": notebook_result_path,
+        "binding": result.get("binding"),
+        "template_binding": result.get("template_binding"),
+        "notebook": result.get("notebook"),
         "raw": result,
     }
 
@@ -212,5 +271,6 @@ async def update_template_style(kernel_id: str, style_name: str, updates: dict) 
         "kernel_id": kernel_id,
         "style_name": style_name,
         "template": template,
+        "template_binding": result.get("template_binding"),
         "raw": result,
     }

@@ -339,8 +339,11 @@ def test_unregister_kernel_clears_execution_history():
 def test_bridge_instances_are_scoped_per_session():
     bridge_a = InspyroBridge.get("session-a")
     bridge_b = InspyroBridge.get("session-b")
+    bridge_a_notebook = InspyroBridge.get("session-a", websocket_scope="notebook")
 
     assert bridge_a is not bridge_b
+    assert bridge_a is not bridge_a_notebook
+    assert bridge_a_notebook.connection_info()["websocket_scope"] == "notebook"
 
 
 @pytest.mark.asyncio
@@ -1900,6 +1903,120 @@ async def test_notebook_sync_cells_reorders_updates_and_drops_omitted_cells(monk
 
 
 @pytest.mark.asyncio
+async def test_notebook_sync_cells_persists_docx_as_nbformat_safe_code_cell(monkeypatch, tmp_path: Path):
+    notebook_payload = {
+        "cells": [],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    fake_bridge = FakeBridge(rest_response={"content": notebook_payload})
+    monkeypatch.setattr(notebook.InspyroBridge, "get", classmethod(lambda cls: fake_bridge))
+    notebook_path = str(tmp_path / "docx-safe.ipynb")
+
+    result = await notebook.notebook_sync_cells(
+        notebook_path,
+        [
+            {
+                "cell_id": "docx-1",
+                "cell_type": "docx",
+                "source": "with build_doc() as doc:\n    doc.text('A')",
+            }
+        ],
+    )
+
+    write_call = next(call for call in fake_bridge.rest_calls if call[0] == "/api/files/write")
+    written_payload = write_call[1]["content"]
+    written_cell = written_payload["cells"][0]
+
+    assert result["cells"][0]["type"] == "docx"
+    assert written_cell["cell_type"] == "code"
+    assert written_cell["metadata"]["inspyro"]["cell_kind"] == "docx"
+
+    nbformat = pytest.importorskip("nbformat")
+    nbformat.validate(nbformat.from_dict(written_payload))
+
+
+def test_docx_source_detector_avoids_pandas_dataframe_false_positive():
+    assert notebook._should_emit_docx("import pandas as pd\ndf = pd.DataFrame({'a': [1]})") is False
+    assert notebook._should_emit_docx("df = DataFrame({'a': [1]})") is False
+    assert notebook._should_emit_docx("with build_doc(order=1) as doc:\n    doc.dataframe(df)") is True
+    assert notebook._should_emit_docx("quality = doc_finalize(profile='delivery')") is True
+
+
+@pytest.mark.asyncio
+async def test_notebook_sync_cells_keeps_session_scoped_kernel_for_source_resolution(monkeypatch, tmp_path: Path):
+    notebook_payload = {
+        "cells": [
+            {
+                "id": "cell-1",
+                "cell_type": "code",
+                "source": "print('persisted')",
+                "metadata": {},
+                "outputs": [],
+                "execution_count": None,
+            }
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    fake_bridge = FakeBridge(rest_response={"content": notebook_payload})
+    monkeypatch.setattr(notebook.InspyroBridge, "get", classmethod(lambda cls, *args, **kwargs: fake_bridge))
+    monkeypatch.setattr(notebook, "resolve_session_id", lambda session_id=None: session_id or "session-a")
+    notebook_path = str(tmp_path / "session-scoped.ipynb")
+    McpSessionState.get().register_notebook("kernel-session", notebook_path, session_id="session-a")
+
+    result = await notebook.notebook_sync_cells(
+        notebook_path,
+        [{"cell_id": "cell-1", "cell_type": "code", "source": "print('persisted')"}],
+    )
+    source_text, cell_type = await notebook._resolve_cell_source_and_type(
+        fake_bridge,
+        kernel_id="kernel-session",
+        cell_id="cell-1",
+        source=None,
+        session_id="session-a",
+    )
+
+    assert result["kernel_id"] == "kernel-session"
+    assert source_text == "print('persisted')"
+    assert cell_type == "code"
+
+
+@pytest.mark.asyncio
+async def test_find_in_notebook_resolves_relative_path_against_workspace(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    notebook_file = workspace / "notebooks" / "demo.ipynb"
+    notebook_file.parent.mkdir(parents=True)
+    notebook_payload = {
+        "cells": [{"id": "cell-1", "cell_type": "markdown", "source": "Gamma", "metadata": {}}],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+    class WorkspaceBridge(FakeBridge):
+        async def rest_get(self, path: str, *, params: dict | None = None) -> dict:
+            self.rest_calls.append((path, params or {}))
+            if path == "/api/system/info":
+                return {"workspace_path": str(workspace)}
+            if path == "/api/files/read":
+                assert params == {"path": str(notebook_file.resolve())}
+                return {"content": notebook_payload}
+            return {}
+
+    fake_bridge = WorkspaceBridge()
+    monkeypatch.setattr(notebook.InspyroBridge, "get", classmethod(lambda cls, *args, **kwargs: fake_bridge))
+
+    result = await notebook.find_in_notebook("notebooks/demo.ipynb", "Gamma")
+
+    assert result["status"] == "ok"
+    assert result["path"] == str(notebook_file.resolve())
+    assert result["match_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_create_kernel_and_attach_kernel_register_local_state(monkeypatch, tmp_path: Path):
     notebook_payload = {"cells": [{"id": "cell-1", "cell_type": "code", "source": "x = 1"}], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
     notebook_path = str(tmp_path / "demo.ipynb")
@@ -3373,6 +3490,29 @@ async def test_check_document_quality_resolves_latest_by_source_path(monkeypatch
     assert result["artifact_id"] == "artifact-source"
     assert "findings" not in result
     assert ("/api/docx/history", {"limit": 1, "source_path": "C:/workspace/source.ipynb"}) in fake_bridge.rest_calls
+
+
+@pytest.mark.asyncio
+async def test_check_document_quality_rejects_exported_docx_source_path(monkeypatch, tmp_path: Path):
+    exported_docx = tmp_path / "report-clean.docx"
+    exported_docx.write_bytes(b"not-a-real-docx-for-selector-test")
+    fake_bridge = FakeBridge()
+
+    async def fake_rest_get(path: str, *, params: dict | None = None) -> dict:
+        fake_bridge.rest_calls.append((path, params or {}))
+        if path == "/api/docx/history":
+            return {"items": []}
+        return {}
+
+    fake_bridge.rest_get = fake_rest_get  # type: ignore[method-assign]
+    monkeypatch.setattr(documents.InspyroBridge, "get", classmethod(lambda cls: fake_bridge))
+
+    result = await documents.check_document_quality(source_path=str(exported_docx), run=True)
+
+    assert result["status"] == "invalid_quality_selector"
+    assert result["source_path"] == str(exported_docx)
+    assert "artifact_id" in result["message"]
+    assert ("/api/docx/history", {"limit": 1, "source_path": str(exported_docx)}) in fake_bridge.rest_calls
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE } from '../config/endpoints';
 import { WS_MSG } from '../contracts/wsMessageTypes.generated';
 
@@ -184,7 +184,9 @@ export default function useMcpActivity({
 
   const activePath = activeFile?.path || null;
   const normalizedActivePath = normalizePath(activePath);
-  const isActiveDirty = Boolean(activePath && modifiedFiles?.has(activePath));
+  const normalizedModifiedPaths = useMemo(() => (
+    new Set(Array.from(modifiedFiles || []).map((path) => normalizePath(path)).filter(Boolean))
+  ), [modifiedFiles]);
 
   useEffect(() => {
     try {
@@ -230,6 +232,7 @@ export default function useMcpActivity({
     const matchesActive = Boolean(
       normalizedActivePath && candidatePaths.some((candidate) => candidate === normalizedActivePath)
     );
+    const matchesDirtyTarget = candidatePaths.some((candidate) => normalizedModifiedPaths.has(candidate));
 
     if (event.phase !== 'started' && agentExecutionState?.run_id === event.run_id) {
       setAgentExecutionState(null);
@@ -246,7 +249,7 @@ export default function useMcpActivity({
       reflected = true;
     }
 
-    if (event.phase === 'started' && hints.show_agent_execution && matchesActive && !isActiveDirty) {
+    if (event.phase === 'started' && hints.show_agent_execution && matchesActive && !matchesDirtyTarget) {
       setAgentExecutionState({
         run_id: event.run_id,
         tool_name: event.tool_name,
@@ -269,7 +272,7 @@ export default function useMcpActivity({
       return reflected;
     }
 
-    if (isActiveDirty && (hints.reload_path || hints.refresh_preview || hints.show_agent_execution)) {
+    if (matchesDirtyTarget && (hints.reload_path || hints.refresh_preview || hints.show_agent_execution)) {
       notifyDirtySkip(event);
       return reflected;
     }
@@ -288,8 +291,8 @@ export default function useMcpActivity({
   }, [
     activePath,
     agentExecutionState,
-    isActiveDirty,
     mirrorEnabled,
+    normalizedModifiedPaths,
     normalizedActivePath,
     notifyDirtySkip,
     onApplyArtifact,

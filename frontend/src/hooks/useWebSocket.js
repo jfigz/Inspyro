@@ -5,8 +5,39 @@ import { createFrontendLogger } from '../utils/frontendLogger';
 const logger = createFrontendLogger('useWebSocket');
 
 const MESSAGE_QUEUE_LIMIT = 250;
+const OUTBOUND_QUEUE_LIMIT = 100;
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10000;
+
+const isQueueableOutboundMessage = (message) => {
+  const type = typeof message?.type === 'string' ? message.type : '';
+  return Boolean(type && type !== 'ping' && type !== 'pong');
+};
+
+const getOutboundDedupeKey = (message) => {
+  const type = typeof message?.type === 'string' ? message.type : '';
+  if (!type) return null;
+  if (message?.request_id) {
+    return `${type}:request:${message.request_id}`;
+  }
+  if (type === 'template_attach') {
+    return [
+      type,
+      message?.kernel_id || '',
+      message?.template_token || '',
+      message?.path || '',
+    ].join(':');
+  }
+  if (type === 'template_upload') {
+    return [
+      type,
+      message?.kernel_id || '',
+      message?.path || '',
+      message?.docx_base64 ? String(message.docx_base64).length : '',
+    ].join(':');
+  }
+  return null;
+};
 
 const useWebSocket = (url = WS_URL) => {
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
@@ -18,12 +49,60 @@ const useWebSocket = (url = WS_URL) => {
   const reconnectAttemptsRef = useRef(0);
   const shouldReconnectRef = useRef(true);
   const messageSeqRef = useRef(0);
+  const outboundQueueRef = useRef([]);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
+  }, []);
+
+  const sendRawMessage = useCallback((socket, message) => {
+    try {
+      socket.send(JSON.stringify(message));
+      return true;
+    } catch (error) {
+      logger.error('Error sending websocket message:', error);
+      return false;
+    }
+  }, []);
+
+  const flushOutboundQueue = useCallback((socket) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN || outboundQueueRef.current.length === 0) {
+      return;
+    }
+    const pending = [...outboundQueueRef.current];
+    outboundQueueRef.current = [];
+    for (let index = 0; index < pending.length; index += 1) {
+      const message = pending[index]?.message;
+      if (!message) continue;
+      const sent = sendRawMessage(socket, message);
+      if (!sent) {
+        outboundQueueRef.current = pending.slice(index);
+        break;
+      }
+    }
+  }, [sendRawMessage]);
+
+  const queueOutboundMessage = useCallback((message) => {
+    if (!isQueueableOutboundMessage(message)) {
+      return false;
+    }
+    const dedupeKey = getOutboundDedupeKey(message);
+    const entry = {
+      message,
+      dedupeKey,
+      queuedAt: Date.now(),
+    };
+    const current = outboundQueueRef.current.filter((item) => (
+      !(dedupeKey && item?.dedupeKey === dedupeKey)
+    ));
+    current.push(entry);
+    outboundQueueRef.current = current.length > OUTBOUND_QUEUE_LIMIT
+      ? current.slice(current.length - OUTBOUND_QUEUE_LIMIT)
+      : current;
+    return true;
   }, []);
 
   const connect = useCallback(() => {
@@ -47,6 +126,7 @@ const useWebSocket = (url = WS_URL) => {
         setConnectionStatus('connected');
         reconnectAttemptsRef.current = 0;
         clearReconnectTimer();
+        flushOutboundQueue(socket);
       };
 
       socket.onmessage = (event) => {
@@ -103,7 +183,7 @@ const useWebSocket = (url = WS_URL) => {
       logger.error('Failed to create WebSocket:', error);
       setConnectionStatus('disconnected');
     }
-  }, [clearReconnectTimer, url]);
+  }, [clearReconnectTimer, flushOutboundQueue, url]);
 
   const reconnectNow = useCallback(() => {
     if (!shouldReconnectRef.current) return;
@@ -118,19 +198,23 @@ const useWebSocket = (url = WS_URL) => {
 
   const sendMessage = useCallback((message) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      try {
-        wsRef.current.send(JSON.stringify(message));
-      } catch (error) {
-        logger.error('Error sending websocket message:', error);
+      const sent = sendRawMessage(wsRef.current, message);
+      if (sent) {
+        return true;
       }
-      return;
+      const queuedAfterSendFailure = queueOutboundMessage(message);
+      reconnectNow();
+      return queuedAfterSendFailure;
     }
+    const queued = queueOutboundMessage(message);
     logger.warn('WebSocket is not connected. State:', wsRef.current?.readyState);
     reconnectNow();
-  }, [reconnectNow]);
+    return queued;
+  }, [queueOutboundMessage, reconnectNow, sendRawMessage]);
 
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
+    outboundQueueRef.current = [];
     clearReconnectTimer();
     const socket = wsRef.current;
     wsRef.current = null;

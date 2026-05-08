@@ -2,7 +2,7 @@
 
 > **Estado:** ✅ Modularizado
 > **Ubicación:** `backend/app/services/jupyter_kernel.py`
-> **Última actualización:** 2026-04-19
+> **Última actualización:** 2026-05-06
 > **Changelog:** `docs/changelog/09-jupyter-kernel.md`
 
 ---
@@ -48,6 +48,8 @@ Gestionar sesiones Jupyter reales por `kernel_id`, ejecutar código Python, capt
 13. Si `execute_reply` vence o falla, el manager cancela los readers IOPub asociados a esa ejecución antes de propagar el error, evitando tareas zombi y contaminación del canal para la siguiente celda.
 14. Lecturas benignas `Empty` en IOPub se degradan como timeout/ausencia temporal y ya no deben contaminar `execution_diagnostics` como error duro del canal.
 15. El snapshot runtime de `execute_cell()` ya no transporta artefactos DOCX ni provenance por `user_expressions`; el kernel devuelve solo `outputs`, `execution_count`, variables y extras de runtime (`performance_data`, `execution_states`, `execution_diagnostics`).
+16. `start_kernel()` solo registra la sesión si el ping inicial llega a `idle`; si no, cierra canales/kernel, recrea una vez y recién después falla con `KERNEL_NOT_READY`.
+17. Antes de ejecutar código de usuario, `execute_cell()` drena mensajes stale, corre un health check corto y, si falla, reinicia/recrea el cliente una sola vez antes de reintentar. Los diagnósticos quedan en `KernelSession.last_kernel_diagnostics`.
 
 ## Fallos frecuentes y observabilidad
 
@@ -60,10 +62,13 @@ Gestionar sesiones Jupyter reales por `kernel_id`, ejecutar código Python, capt
 - Degradación del transporte WS compartido si otro notebook/document pipeline ocupa la misma conexión; desde 2026-04-19 ese caso debe reciclar la conexión lenta antes de bloquear indefinidamente el kernel.
 - Reinicio aparente de kernel con cliente inválido reutilizado, que dispara errores como `threads can only be started once` al primer comando posterior.
 - Falso `iopub_error` si lecturas vacías benignas se clasifican como excepción inesperada y empujan a handlers superiores a rutas de recuperación innecesarias.
+- `KERNEL_NOT_READY` cuando el kernel no entrega `idle` en startup, restart o health check previo a una celda.
+- `SHELL_REPLY_TIMEOUT` cuando el canal shell no entrega `execute_reply` dentro del presupuesto de ejecución.
 
 ### Observabilidad
 - `INSPYRO_NOTEBOOK_DEBUG=1` para trazas detalladas.
 - Verificar cleanup en `shutdown_all_kernels()` durante cierre de app.
+- `get_kernel_diagnostics(kernel_id)` expone `ready` y el último diagnóstico de readiness para que routers/MCP puedan incluir causa y fase en errores posteriores.
 
 ## Archivos fuente y puntos de entrada
 
@@ -92,5 +97,6 @@ Puntos de entrada principales:
 13. El loop IOPub trata `Empty` como espera benigna y reserva `iopub_error` para fallos reales del canal, manteniendo la ruta de degradación graceful hacia `04-notebook-handlers`.
 14. La integración notebook-first deja la materialización DOCX/PDF completamente fuera de `execute_cell()`: el runtime del kernel solo muta el estado documental y el coordinador de `04-notebook-handlers` exporta después del terminal.
 15. El desacople IOPub ahora descansa sobre transporte WS serializado por conexión en `02-websocket-manager`; el kernel ya no depende de múltiples productores compitiendo directamente por `websocket.send_text()` cuando dos notebooks comparten la misma sesión UI.
+16. El readiness del kernel queda verificado antes de exponer una sesión y antes de cada ejecución de usuario; si la verificación falla se intenta un único restart/recreate y luego se reporta `KERNEL_NOT_READY` sin marcar la sesión como lista.
 
 Detalle histórico: `docs/changelog/09-jupyter-kernel.md`.

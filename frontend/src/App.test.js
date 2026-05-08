@@ -2,6 +2,7 @@ import {
   collectNewConflictPaths,
   getWorkspaceSessionFromPayload,
   pruneResolvedConflictPaths,
+  resolveHomeTemplateOpenPaths,
   shouldShowProjectLauncher,
 } from './App';
 import { shouldAutoEnableMirrorAfterMcpAction } from './hooks/useMcpShellControls';
@@ -191,5 +192,47 @@ describe('applyMcpArtifactToDocumentState', () => {
     );
 
     expect(Array.from(nextWarnedPaths)).toEqual(['c:/workspace/fresh.ipynb']);
+  });
+});
+
+describe('resolveHomeTemplateOpenPaths', () => {
+  it('uses the notebook path as the open target when a template inventory row has a mirror DOCX', () => {
+    const resolved = resolveHomeTemplateOpenPaths({
+      path: 'C:\\workspace\\reports\\bridge.ipynb',
+      template_mirror_path: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx',
+    });
+
+    expect(resolved).toEqual({
+      notebookPath: 'C:\\workspace\\reports\\bridge.ipynb',
+      templateMirrorPath: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx',
+      templateJsonPath: null,
+    });
+  });
+
+  it('does not treat a DOCX template path as the notebook to open', () => {
+    const resolved = resolveHomeTemplateOpenPaths(
+      { path: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx' },
+      'C:\\workspace\\reports\\bridge.ipynb',
+    );
+
+    expect(resolved).toEqual({
+      notebookPath: 'C:\\workspace\\reports\\bridge.ipynb',
+      templateMirrorPath: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx',
+      templateJsonPath: null,
+    });
+  });
+
+  it('promotes a portable JSON binding as a template open source', () => {
+    const resolved = resolveHomeTemplateOpenPaths({
+      notebook_path: 'C:\\workspace\\reports\\bridge.ipynb',
+      template_json_path: 'C:\\workspace\\reports\\bridge.inspyro-template.json',
+      template_mirror_path: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx',
+    });
+
+    expect(resolved).toEqual({
+      notebookPath: 'C:\\workspace\\reports\\bridge.ipynb',
+      templateMirrorPath: 'C:\\workspace\\.inspyro\\templates\\bridge-template.docx',
+      templateJsonPath: 'C:\\workspace\\reports\\bridge.inspyro-template.json',
+    });
   });
 });

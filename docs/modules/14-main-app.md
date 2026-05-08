@@ -2,7 +2,7 @@
 
 > **Estado:** ✅ Núcleo estable
 > **Ubicación:** `frontend/src/App.js`
-> **Última actualización:** 2026-05-03
+> **Última actualización:** 2026-05-08
 > **Changelog:** `docs/changelog/14-main-app.md`
 
 ---
@@ -10,6 +10,27 @@
 ## Propósito sistémico
 
 Actuar como shell principal de la aplicación: layout global, selección de modo (code/notebook), bootstrap del workspace activo, wiring de hooks (`useFileSystem`, `useAppWebSocket`, `useMcpActivity`, `useMcpShellControls`, `useMcpMirror`), integración desktop-aware con `window.inspyroDesktop` y coordinación entre paneles, notificaciones y controles MCP. El shell mantiene dos superficies frontend-locales (`home` y `file`), pero la home persistente del workspace ya se hidrata desde un snapshot backend shell-owned (`GET /api/system/home-summary`) en vez de depender del estado montado del notebook o de stores frontend legacy.
+
+## 2026-05-08 - Plantilla JSON anidada al notebook
+
+- `notebookSessionsByPath` suma `templateBinding` como estado notebook-scoped junto a `templateInfo` y `templateBlob`; `notebook_created`/`notebook_loaded`/`notebook_attached` y ACKs `template_*` actualizan ese estado sin marcar dirty persistible.
+- `VisualizationPanel` y `DocxViewer` pasan `templateBinding` y `onTemplateBind` al Template Editor. La acción `Anidar plantilla` llama `POST /api/templates/bind`, refresca la snapshot runtime con el `.ipynb` parcheado y muestra estado `Vinculada`/`Perdida`.
+- Home prioriza `template_json_path`/`template_binding` del `.ipynb` sobre el mirror DOCX legacy. Las entradas que vienen solo desde `<workspace>/.inspyro/templates/index.json` se mantienen como fallback y exponen `Migrar a JSON`, que abre el editor sobre el notebook origen para anidar la plantilla.
+- `resolveHomeTemplateOpenPaths()` distingue notebook, mirror DOCX y JSON portable para evitar tokenizar mirrors cuando el binding canónico ya existe.
+- `template-binding-bank` valida este wiring desde navegador real: bind en editor, Home summary canónico, warning por JSON faltante y ausencia de dirty falso tras hidratación runtime.
+
+## 2026-05-05 - MCP/Home y dirty mirror estabilizados
+
+- `App.js` filtra progreso runtime en Home para que filas `completed`/`idle` no ocupen el carril `Ejecutar` solo por traer `progress.percent=0`, dejando visibles los clientes MCP y el estado real del convertidor compartido.
+- El shell refresca Home silenciosamente al recibir `mcp_activity_event`, de modo que la tarjeta Agents refleja actividad nueva sin depender de navegación manual.
+- `useMcpActivity`, `useMcpMirror` y `useFileSystem` comparan rutas dirty normalizadas y usan referencias actuales para eventos MCP/workspace, bloqueando recargas de background cuando existe contenido local sin guardar.
+- La cobertura E2E refuerza MCP, Home, selección de workspace y límites responsivos sin cambiar contratos WS/REST ni el storage persistido.
+
+## 2026-05-04 - Home abre plantillas por notebook origen
+
+- `App.js` centraliza `resolveHomeTemplateOpenPaths()` para distinguir una `.ipynb` dueña del espejo `.docx` persistido en `<workspace>/.inspyro/templates/`.
+- `Abrir plantilla` desde Home abre primero el notebook origen y solo usa el mirror DOCX para tokenizarlo por `POST /api/templates/tokenize`; el DOCX ya no pasa por `/api/files/read` ni genera un falso error de archivo binario.
+- Si la home no trae notebook origen verificable, el shell muestra una advertencia y evita abrir el modal en estado vacío con una plantilla visualmente listada pero no adjuntable.
 
 ## 2026-05-03 - Branding Inspyro PNG reproducible
 

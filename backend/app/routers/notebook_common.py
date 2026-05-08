@@ -60,6 +60,8 @@ TEMPLATE_TABLE_PREVIEW_CONCURRENCY = max(1, int(os.getenv("INSPYRO_TEMPLATE_TABL
 _template_table_preview_semaphore = asyncio.Semaphore(TEMPLATE_TABLE_PREVIEW_CONCURRENCY)
 TEMPLATE_STYLE_PREVIEW_CONCURRENCY = max(1, int(os.getenv("INSPYRO_TEMPLATE_STYLE_PREVIEW_CONCURRENCY", "1")))
 _template_style_preview_semaphore = asyncio.Semaphore(TEMPLATE_STYLE_PREVIEW_CONCURRENCY)
+TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S = max(5, int(os.getenv("INSPYRO_TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT", "45")))
+_template_native_word_preview_lock = asyncio.Lock()
 TEMPLATE_PREVIEW_TIMEOUT_S = max(5, int(os.getenv("INSPYRO_TEMPLATE_PREVIEW_TIMEOUT", "20")))
 LOCK_TIMEOUT_S = max(0.1, float(os.getenv("INSPYRO_LOCK_TIMEOUT", "60")))
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -221,6 +223,7 @@ async def _apply_template_bytes_to_kernel(
                         template_path,
                         extracted.get(template_service.TABLE_STYLE_RUNTIME_DEFAULTS_KEY),
                         extracted.get(template_service.BUILDER_REQUIRED_STYLE_DEFAULTS_KEY),
+                        extracted.get(template_service.SEMANTIC_STYLE_SLOTS_KEY),
                     )
                     await jupyter_kernel_manager.execute_cell(kernel_id, set_template_code, capture_variables=False)
             except Exception as exc:

@@ -323,6 +323,39 @@ const NUMERIC_KEYS = new Set([
     'outline_level',
 ]);
 
+const FONT_EDIT_KEYS = new Set([
+    'font_name',
+    'font_size_pt',
+    'bold',
+    'italic',
+    'underline',
+    'underline_style',
+    'color_rgb',
+    'highlight_color',
+    'strike',
+    'double_strike',
+    'all_caps',
+    'small_caps',
+    'superscript',
+    'subscript',
+]);
+
+const PARAGRAPH_EDIT_KEYS = new Set([
+    'space_before_pt',
+    'space_after_pt',
+    'line_spacing',
+    'line_spacing_rule',
+    'alignment',
+    'first_line_indent_inches',
+    'left_indent_inches',
+    'right_indent_inches',
+    'keep_with_next',
+    'keep_together',
+    'page_break_before',
+    'widow_control',
+    'outline_level',
+]);
+
 const normalizeForCompare = (key, value) => {
     if (value === '' || value === null || value === undefined) return '';
     if (NUMERIC_KEYS.has(key)) return Number(value);
@@ -334,6 +367,11 @@ const diffKeys = (current = {}, baseline = {}) => {
         normalizeForCompare(key, current[key]) !== normalizeForCompare(key, baseline[key])
     ));
 };
+
+const areDraftObjectsEqual = (current = {}, baseline = {}) => (
+    diffKeys(current || {}, baseline || {}).length === 0
+    && diffKeys(baseline || {}, current || {}).length === 0
+);
 
 const buildPreviewKey = (styleName, props) => {
     const normalized = normalizePreviewProps(props);
@@ -479,6 +517,24 @@ const StyleEditPanel = ({
         tbl_style_pr: '',
     });
     const [hasAdvancedChanges, setHasAdvancedChanges] = useState(false);
+    const [wordCompleteEditMode, setWordCompleteEditMode] = useState(false);
+    const [wordStyleJson, setWordStyleJson] = useState({
+        metadata: '',
+        visibility: '',
+        font: '',
+        paragraph: '',
+        list: '',
+        table: '',
+    });
+    const [wordStyleOriginal, setWordStyleOriginal] = useState({
+        metadata: '',
+        visibility: '',
+        font: '',
+        paragraph: '',
+        list: '',
+        table: '',
+    });
+    const [hasWordStyleChanges, setHasWordStyleChanges] = useState(false);
 
     // Helper to check if selection is global (used throughout component)
     const isGlobalSelection = styleInfo?.kind === 'global' || styleInfo?.name === 'global';
@@ -520,6 +576,7 @@ const StyleEditPanel = ({
     const [localTable, setLocalTable] = useState({});
     const [baselineTable, setBaselineTable] = useState({});
     const fontPickerRef = useRef(null);
+    const lastHydratedDraftRef = useRef({ identity: null, fingerprint: null });
     const [isFontMenuOpen, setIsFontMenuOpen] = useState(false);
     const [fontMenuQuery, setFontMenuQuery] = useState('');
 
@@ -531,6 +588,43 @@ const StyleEditPanel = ({
             ? buildTablePreviewSignature(styleInfo?.style)
             : null,
     }), [styleInfo]);
+    const wordStyleDetails = useMemo(() => {
+        const extracted = advancedDetails?.word_style || styleInfo?.style?.word_style || {};
+        const visibility = advancedDetails?.style_visibility
+            || styleInfo?.style?.style_visibility
+            || extracted?.visibility
+            || {};
+        return {
+            metadata: {
+                ...(extracted?.metadata || {}),
+                style_id: styleMeta.style_id || extracted?.metadata?.style_id || null,
+                type: styleMeta.style_type || extracted?.metadata?.type || null,
+                category: styleMeta.category || null,
+            },
+            visibility,
+            font: extracted?.font || {},
+            paragraph: extracted?.paragraph || {},
+            list: styleInfo?.style?.list_info || extracted?.list || {},
+            table: {
+                ...(styleInfo?.style?.resolved_table_format || {}),
+                ...(styleInfo?.style?.xml_table_format || {}),
+                ...(extracted?.table || {}),
+            },
+        };
+    }, [advancedDetails, styleInfo, styleMeta]);
+    const styleDraftIdentity = useMemo(() => {
+        if (!styleInfo) return 'none';
+        if (isGlobalSelection) return 'global';
+        const selectionKey = styleInfo?.selection_key
+            || `${styleMeta.category || ''}|${styleMeta.style_id || ''}|${displayStyleName || resolvedStyleName || ''}`;
+        return [
+            selectionKey,
+            styleMeta.style_id || '',
+            styleMeta.style_type || '',
+            styleMeta.category || '',
+            displayStyleName || resolvedStyleName || '',
+        ].join('::');
+    }, [displayStyleName, isGlobalSelection, resolvedStyleName, styleInfo, styleMeta]);
 
     const resolvedFontJson = useMemo(() => (
         resolvedFont && Object.keys(resolvedFont).length ? formatJson(resolvedFont) : null
@@ -593,6 +687,10 @@ const StyleEditPanel = ({
     const changedKeys = useMemo(
         () => [...fontChangedKeys, ...paragraphChangedKeys, ...tableChangedBackendKeys],
         [fontChangedKeys, paragraphChangedKeys, tableChangedBackendKeys]
+    );
+    const draftHasChanges = useMemo(
+        () => fontChangedKeys.length > 0 || paragraphChangedKeys.length > 0 || tableChangedLocalKeys.length > 0,
+        [fontChangedKeys, paragraphChangedKeys, tableChangedLocalKeys]
     );
 
     const effectiveFont = useMemo(() => {
@@ -715,6 +813,7 @@ const StyleEditPanel = ({
         () => getFontAvailabilityInfo(
             effectiveFont.font_name || resolvedFont.font_name || resolvedFont.name,
             templateDetails?.system_font_catalog || [],
+            templateDetails,
         ),
         [effectiveFont.font_name, resolvedFont.font_name, resolvedFont.name, templateDetails]
     );
@@ -744,11 +843,27 @@ const StyleEditPanel = ({
         tbl_style_pr: details?.tbl_style_pr ? formatJson(details.tbl_style_pr) : '',
     }), []);
 
+    const buildWordStyleJsonState = useCallback((details) => ({
+        metadata: details?.metadata && Object.keys(details.metadata).length ? formatJson(details.metadata) : '',
+        visibility: details?.visibility && Object.keys(details.visibility).length ? formatJson(details.visibility) : '',
+        font: details?.font && Object.keys(details.font).length ? formatJson(details.font) : '',
+        paragraph: details?.paragraph && Object.keys(details.paragraph).length ? formatJson(details.paragraph) : '',
+        list: details?.list && Object.keys(details.list).length ? formatJson(details.list) : '',
+        table: details?.table && Object.keys(details.table).length ? formatJson(details.table) : '',
+    }), []);
+
     const computeAdvancedChanges = useCallback(
         (nextState) => Object.keys(nextState).some(
             key => (nextState[key] || '').trim() !== (advancedOriginal[key] || '').trim()
         ),
         [advancedOriginal]
+    );
+
+    const computeWordStyleChanges = useCallback(
+        (nextState) => Object.keys(nextState).some(
+            key => (nextState[key] || '').trim() !== (wordStyleOriginal[key] || '').trim()
+        ),
+        [wordStyleOriginal]
     );
 
     useEffect(() => {
@@ -759,6 +874,15 @@ const StyleEditPanel = ({
         setHasAdvancedChanges(false);
         setAdvancedEditMode(false);
     }, [advancedDetails, buildAdvancedJsonState, isGlobalSelection]);
+
+    useEffect(() => {
+        if (isGlobalSelection) return;
+        const nextState = buildWordStyleJsonState(wordStyleDetails);
+        setWordStyleJson(nextState);
+        setWordStyleOriginal(nextState);
+        setHasWordStyleChanges(false);
+        setWordCompleteEditMode(false);
+    }, [buildWordStyleJsonState, isGlobalSelection, wordStyleDetails]);
 
     const handleAdvancedChange = (key, value) => {
         setAdvancedJson(prev => {
@@ -796,6 +920,22 @@ const StyleEditPanel = ({
         setAdvancedEditMode(prev => !prev);
     };
 
+    const handleWordStyleJsonChange = (key, value) => {
+        setWordStyleJson(prev => {
+            const nextState = { ...prev, [key]: value };
+            setHasWordStyleChanges(computeWordStyleChanges(nextState));
+            return nextState;
+        });
+    };
+
+    const toggleWordCompleteEditMode = () => {
+        if (wordCompleteEditMode) {
+            setWordStyleJson(wordStyleOriginal);
+            setHasWordStyleChanges(false);
+        }
+        setWordCompleteEditMode(prev => !prev);
+    };
+
     // Auto-trigger preview with debounce when UI controls change (Issue 3)
     const buildPreviewPropsFromState = useCallback(() => {
         const tablePreviewPayload = mapLocalTableToTemplateUpdates(localTable);
@@ -812,26 +952,41 @@ const StyleEditPanel = ({
     }, [localFont, localParagraph, localTable, changedKeys, styleMeta]);
 
     useEffect(() => {
-        if (!styleInfo || isGlobalSelection || !onRequestPreview || styleInfo.status === 'missing' || !resolvedStyleName) return;
+        if (!showInlinePreview || !styleInfo || isGlobalSelection || !onRequestPreview || styleInfo.status === 'missing' || !resolvedStyleName) return;
         // Keep preview debounce centralized in TemplateEditor request pipeline.
         onRequestPreview(resolvedStyleName, buildPreviewPropsFromState(), { immediate: !hasChanges });
-    }, [localFont, localParagraph, hasChanges, resolvedStyleName, isGlobalSelection, onRequestPreview, buildPreviewPropsFromState, styleInfo]);
+    }, [localFont, localParagraph, hasChanges, resolvedStyleName, isGlobalSelection, onRequestPreview, buildPreviewPropsFromState, styleInfo, showInlinePreview]);
 
     useEffect(() => {
-        if (!styleInfo) {
+        const clearDraft = () => {
             setLocalFont({});
             setLocalParagraph({});
-            setHasChanges(false);
             setBaselineFont({});
             setBaselineParagraph({});
             setLocalTable({});
             setBaselineTable({});
             setAdvancedEditMode(false);
             setHasAdvancedChanges(false);
+            setWordCompleteEditMode(false);
+            setHasWordStyleChanges(false);
+            setHasChanges(false);
+        };
+
+        if (!styleInfo) {
+            if (lastHydratedDraftRef.current?.identity === 'none') {
+                return;
+            }
+            lastHydratedDraftRef.current = { identity: 'none', fingerprint: 'empty' };
+            clearDraft();
             return;
         }
+
+        let nextFont;
+        let nextParagraph;
+        let nextTable = {};
+
         if (isGlobalSelection) {
-            const nextFont = {
+            nextFont = {
                 font_name: documentDefaults.font?.font_name || documentDefaults.font?.name || '',
                 font_size_pt: documentDefaults.font?.font_size_pt ?? documentDefaults.font?.size_pt ?? '',
                 bold: documentDefaults.font?.bold ?? false,
@@ -847,7 +1002,7 @@ const StyleEditPanel = ({
                 superscript: documentDefaults.font?.superscript ?? false,
                 subscript: documentDefaults.font?.subscript ?? false,
             };
-            const nextParagraph = {
+            nextParagraph = {
                 space_before_pt: documentDefaults.paragraph?.space_before_pt ?? '',
                 space_after_pt: documentDefaults.paragraph?.space_after_pt ?? '',
                 alignment: documentDefaults.paragraph?.alignment || '',
@@ -862,95 +1017,115 @@ const StyleEditPanel = ({
                 widow_control: documentDefaults.paragraph?.widow_control ?? false,
                 outline_level: '',
             };
-            setLocalFont(nextFont);
-            setLocalParagraph(nextParagraph);
-            setBaselineFont(nextFont);
-            setBaselineParagraph(nextParagraph);
-            setLocalTable({});
-            setBaselineTable({});
-            setAdvancedEditMode(false);
-            setHasAdvancedChanges(false);
-            setHasChanges(false);
+        } else {
+            const font = styleInfo?.style?.font || {};
+            const paragraph = styleInfo?.style?.paragraph_format || {};
+            const resolvedFontValues = styleInfo?.style?.resolved_font || {};
+            const resolvedParagraphValues = styleInfo?.style?.resolved_paragraph_format || {};
+
+            const advFont = parseRprToFontShared(advancedDetails?.r_pr, templateDetails?.theme || null);
+            const advPara = parsePprToParagraph(advancedDetails?.p_pr);
+
+            nextFont = {
+                font_name: advFont.font_name || font.name || font.font_name || resolvedFontValues.font_name || resolvedFontValues.name || '',
+                font_size_pt: advFont.font_size_pt ?? font.size_pt ?? font.font_size_pt ?? resolvedFontValues.font_size_pt ?? resolvedFontValues.size_pt ?? '',
+                bold: advFont.bold ?? font.bold ?? resolvedFontValues.bold ?? false,
+                italic: advFont.italic ?? font.italic ?? resolvedFontValues.italic ?? false,
+                underline: advFont.underline ?? font.underline ?? resolvedFontValues.underline ?? false,
+                underline_style: advFont.underline_style || font.underline_style || resolvedFontValues.underline_style || '',
+                color_rgb: advFont.color_rgb || font.color_rgb || resolvedFontValues.color_rgb || '',
+                highlight_color: advFont.highlight_color || font.highlight_color || resolvedFontValues.highlight_color || '',
+                strike: advFont.strike ?? font.strike ?? resolvedFontValues.strike ?? false,
+                double_strike: advFont.double_strike ?? font.double_strike ?? resolvedFontValues.double_strike ?? false,
+                all_caps: advFont.all_caps ?? font.all_caps ?? resolvedFontValues.all_caps ?? false,
+                small_caps: advFont.small_caps ?? font.small_caps ?? resolvedFontValues.small_caps ?? false,
+                superscript: advFont.superscript ?? font.superscript ?? resolvedFontValues.superscript ?? false,
+                subscript: advFont.subscript ?? font.subscript ?? resolvedFontValues.subscript ?? false,
+            };
+            nextParagraph = {
+                space_before_pt: advPara.space_before_pt ?? paragraph.space_before_pt ?? resolvedParagraphValues.space_before_pt ?? '',
+                space_after_pt: advPara.space_after_pt ?? paragraph.space_after_pt ?? resolvedParagraphValues.space_after_pt ?? '',
+                alignment: advPara.alignment || paragraph.alignment || resolvedParagraphValues.alignment || '',
+                line_spacing: advPara.line_spacing ?? paragraph.line_spacing ?? resolvedParagraphValues.line_spacing ?? '',
+                line_spacing_rule: advPara.line_spacing_rule || paragraph.line_spacing_rule || resolvedParagraphValues.line_spacing_rule || '',
+                first_line_indent_inches: advPara.first_line_indent_inches ?? paragraph.first_line_indent_inches ?? resolvedParagraphValues.first_line_indent_inches ?? '',
+                left_indent_inches: advPara.left_indent_inches ?? paragraph.left_indent_inches ?? resolvedParagraphValues.left_indent_inches ?? '',
+                right_indent_inches: advPara.right_indent_inches ?? paragraph.right_indent_inches ?? resolvedParagraphValues.right_indent_inches ?? '',
+                keep_with_next: advPara.keep_with_next ?? paragraph.keep_with_next ?? resolvedParagraphValues.keep_with_next ?? false,
+                keep_together: advPara.keep_together ?? paragraph.keep_together ?? resolvedParagraphValues.keep_together ?? false,
+                page_break_before: advPara.page_break_before ?? paragraph.page_break_before ?? resolvedParagraphValues.page_break_before ?? false,
+                widow_control: advPara.widow_control ?? paragraph.widow_control ?? resolvedParagraphValues.widow_control ?? false,
+                outline_level: advPara.outline_level ?? paragraph.outline_level ?? resolvedParagraphValues.outline_level ?? '',
+            };
+
+            const tableFormat = styleInfo?.style?.resolved_table_format || styleInfo?.style?.xml_table_format || {};
+            const cellFormat = styleInfo?.style?.resolved_cell_format || styleInfo?.style?.xml_cell_format || {};
+            nextTable = {
+                border_style: tableFormat.borders?.top?.style || tableFormat.borders?.left?.style || 'single',
+                border_size_pt: tableFormat.borders?.top?.size_pt || tableFormat.borders?.left?.size_pt || 0.5,
+                border_color: tableFormat.borders?.top?.color || tableFormat.borders?.left?.color || '000000',
+                shading_color: tableFormat.shading_color || '',
+                alignment: tableFormat.alignment || 'left',
+                width_type: tableFormat.width_type || 'auto',
+                width_value: tableFormat.width_value || 100,
+                layout_type: tableFormat.layout_type || 'autofit',
+                cell_spacing_pt: tableFormat.cell_spacing_pt ?? 0,
+                cell_margin_top_pt: tableFormat.cell_margins?.top ?? 0,
+                cell_margin_bottom_pt: tableFormat.cell_margins?.bottom ?? 0,
+                cell_margin_left_pt: tableFormat.cell_margins?.left ?? 5.4,
+                cell_margin_right_pt: tableFormat.cell_margins?.right ?? 5.4,
+                look_first_row: tableFormat.look?.firstRow ?? true,
+                look_last_row: tableFormat.look?.lastRow ?? false,
+                look_first_column: tableFormat.look?.firstColumn ?? true,
+                look_last_column: tableFormat.look?.lastColumn ?? false,
+                look_no_h_band: tableFormat.look?.noHBand ?? false,
+                look_no_v_band: tableFormat.look?.noVBand ?? true,
+                cell_shading_color: cellFormat.shading_color || '',
+                cell_vertical_align: cellFormat.vertical_align || 'top',
+            };
+        }
+
+        const fingerprint = JSON.stringify({
+            font: nextFont,
+            paragraph: nextParagraph,
+            table: nextTable,
+        });
+        const lastHydrated = lastHydratedDraftRef.current || {};
+        const identityChanged = lastHydrated.identity !== styleDraftIdentity;
+        const incomingMatchesLocal =
+            areDraftObjectsEqual(localFont, nextFont)
+            && areDraftObjectsEqual(localParagraph, nextParagraph)
+            && areDraftObjectsEqual(localTable, nextTable);
+
+        if (!identityChanged && draftHasChanges && !incomingMatchesLocal) {
             return;
         }
-        const font = styleInfo?.style?.font || {};
-        const paragraph = styleInfo?.style?.paragraph_format || {};
-        const resolvedFontValues = styleInfo?.style?.resolved_font || {};
-        const resolvedParagraphValues = styleInfo?.style?.resolved_paragraph_format || {};
+        if (!identityChanged && lastHydrated.fingerprint === fingerprint && !draftHasChanges) {
+            return;
+        }
 
-        // Parse advanced details for bidirectional sync (XML -> UI)
-        const advFont = parseRprToFontShared(advancedDetails?.r_pr, templateDetails?.theme || null);
-        const advPara = parsePprToParagraph(advancedDetails?.p_pr);
-
-        const nextFont = {
-            font_name: advFont.font_name || font.name || font.font_name || resolvedFontValues.font_name || resolvedFontValues.name || '',
-            font_size_pt: advFont.font_size_pt ?? font.size_pt ?? font.font_size_pt ?? resolvedFontValues.font_size_pt ?? resolvedFontValues.size_pt ?? '',
-            bold: advFont.bold ?? font.bold ?? resolvedFontValues.bold ?? false,
-            italic: advFont.italic ?? font.italic ?? resolvedFontValues.italic ?? false,
-            underline: advFont.underline ?? font.underline ?? resolvedFontValues.underline ?? false,
-            underline_style: advFont.underline_style || font.underline_style || resolvedFontValues.underline_style || '',
-            color_rgb: advFont.color_rgb || font.color_rgb || resolvedFontValues.color_rgb || '',
-            highlight_color: advFont.highlight_color || font.highlight_color || resolvedFontValues.highlight_color || '',
-            strike: advFont.strike ?? font.strike ?? resolvedFontValues.strike ?? false,
-            double_strike: advFont.double_strike ?? font.double_strike ?? resolvedFontValues.double_strike ?? false,
-            all_caps: advFont.all_caps ?? font.all_caps ?? resolvedFontValues.all_caps ?? false,
-            small_caps: advFont.small_caps ?? font.small_caps ?? resolvedFontValues.small_caps ?? false,
-            superscript: advFont.superscript ?? font.superscript ?? resolvedFontValues.superscript ?? false,
-            subscript: advFont.subscript ?? font.subscript ?? resolvedFontValues.subscript ?? false,
-        };
-        const nextParagraph = {
-            space_before_pt: advPara.space_before_pt ?? paragraph.space_before_pt ?? resolvedParagraphValues.space_before_pt ?? '',
-            space_after_pt: advPara.space_after_pt ?? paragraph.space_after_pt ?? resolvedParagraphValues.space_after_pt ?? '',
-            alignment: advPara.alignment || paragraph.alignment || resolvedParagraphValues.alignment || '',
-            line_spacing: advPara.line_spacing ?? paragraph.line_spacing ?? resolvedParagraphValues.line_spacing ?? '',
-            line_spacing_rule: advPara.line_spacing_rule || paragraph.line_spacing_rule || resolvedParagraphValues.line_spacing_rule || '',
-            first_line_indent_inches: advPara.first_line_indent_inches ?? paragraph.first_line_indent_inches ?? resolvedParagraphValues.first_line_indent_inches ?? '',
-            left_indent_inches: advPara.left_indent_inches ?? paragraph.left_indent_inches ?? resolvedParagraphValues.left_indent_inches ?? '',
-            right_indent_inches: advPara.right_indent_inches ?? paragraph.right_indent_inches ?? resolvedParagraphValues.right_indent_inches ?? '',
-            keep_with_next: advPara.keep_with_next ?? paragraph.keep_with_next ?? resolvedParagraphValues.keep_with_next ?? false,
-            keep_together: advPara.keep_together ?? paragraph.keep_together ?? resolvedParagraphValues.keep_together ?? false,
-            page_break_before: advPara.page_break_before ?? paragraph.page_break_before ?? resolvedParagraphValues.page_break_before ?? false,
-            widow_control: advPara.widow_control ?? paragraph.widow_control ?? resolvedParagraphValues.widow_control ?? false,
-            outline_level: advPara.outline_level ?? paragraph.outline_level ?? resolvedParagraphValues.outline_level ?? '',
-        };
+        lastHydratedDraftRef.current = { identity: styleDraftIdentity, fingerprint };
         setLocalFont(nextFont);
         setLocalParagraph(nextParagraph);
         setBaselineFont(nextFont);
         setBaselineParagraph(nextParagraph);
-
-        // Initialize table properties for table-type styles
-        const tableFormat = styleInfo?.style?.resolved_table_format || styleInfo?.style?.xml_table_format || {};
-        const cellFormat = styleInfo?.style?.resolved_cell_format || styleInfo?.style?.xml_cell_format || {};
-        const nextTable = {
-            border_style: tableFormat.borders?.top?.style || tableFormat.borders?.left?.style || 'single',
-            border_size_pt: tableFormat.borders?.top?.size_pt || tableFormat.borders?.left?.size_pt || 0.5,
-            border_color: tableFormat.borders?.top?.color || tableFormat.borders?.left?.color || '000000',
-            shading_color: tableFormat.shading_color || '',
-            alignment: tableFormat.alignment || 'left',
-            width_type: tableFormat.width_type || 'auto',
-            width_value: tableFormat.width_value || 100,
-            layout_type: tableFormat.layout_type || 'autofit',
-            cell_spacing_pt: tableFormat.cell_spacing_pt ?? 0,
-            cell_margin_top_pt: tableFormat.cell_margins?.top ?? 0,
-            cell_margin_bottom_pt: tableFormat.cell_margins?.bottom ?? 0,
-            cell_margin_left_pt: tableFormat.cell_margins?.left ?? 5.4,
-            cell_margin_right_pt: tableFormat.cell_margins?.right ?? 5.4,
-            // tblLook options
-            look_first_row: tableFormat.look?.firstRow ?? true,
-            look_last_row: tableFormat.look?.lastRow ?? false,
-            look_first_column: tableFormat.look?.firstColumn ?? true,
-            look_last_column: tableFormat.look?.lastColumn ?? false,
-            look_no_h_band: tableFormat.look?.noHBand ?? false,
-            look_no_v_band: tableFormat.look?.noVBand ?? true,
-            // Cell properties
-            cell_shading_color: cellFormat.shading_color || '',
-            cell_vertical_align: cellFormat.vertical_align || 'top',
-        };
         setLocalTable(nextTable);
         setBaselineTable(nextTable);
-
+        setAdvancedEditMode(false);
+        setHasAdvancedChanges(false);
         setHasChanges(false);
-    }, [styleInfo, isGlobalSelection, advancedDetails, documentDefaults]);
+    }, [
+        advancedDetails,
+        documentDefaults,
+        draftHasChanges,
+        isGlobalSelection,
+        localFont,
+        localParagraph,
+        localTable,
+        styleDraftIdentity,
+        styleInfo,
+        templateDetails,
+    ]);
 
     useEffect(() => {
         setIsFontMenuOpen(false);
@@ -968,11 +1143,8 @@ const StyleEditPanel = ({
     }, []);
 
     useEffect(() => {
-        const changed = diffKeys(localFont, baselineFont).length > 0
-            || diffKeys(localParagraph, baselineParagraph).length > 0
-            || diffKeys(localTable, baselineTable).length > 0;
-        setHasChanges(changed);
-    }, [localFont, localParagraph, localTable, baselineFont, baselineParagraph, baselineTable, isGlobalSelection]);
+        setHasChanges(draftHasChanges);
+    }, [draftHasChanges]);
 
     // Auto-sync UI changes -> JSON display (Issue 1 part 2)
     useEffect(() => {
@@ -991,7 +1163,7 @@ const StyleEditPanel = ({
     };
 
     const handleChange = (key, value) => {
-        if (key in localFont) {
+        if (FONT_EDIT_KEYS.has(key)) {
             setLocalFont(prev => {
                 const next = { ...prev, [key]: value };
                 if (key === 'underline' && !value) {
@@ -1008,7 +1180,7 @@ const StyleEditPanel = ({
                 }
                 return next;
             });
-        } else {
+        } else if (PARAGRAPH_EDIT_KEYS.has(key)) {
             setLocalParagraph(prev => ({ ...prev, [key]: value }));
         }
     };
@@ -1049,6 +1221,20 @@ const StyleEditPanel = ({
         }
     };
 
+    const parseJsonObjectSection = (label, value) => {
+        const trimmed = (value || '').trim();
+        if (!trimmed) return { value: null };
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return { error: `${label} debe ser un objeto JSON.` };
+            }
+            return { value: parsed };
+        } catch (error) {
+            return { error: `${label} contiene JSON inválido.` };
+        }
+    };
+
     const buildAdvancedPayload = () => {
         if (!hasAdvancedChanges) return {};
         const changedKeys = Object.keys(advancedJson).filter(
@@ -1075,12 +1261,40 @@ const StyleEditPanel = ({
         return payload;
     };
 
+    const buildWordStylePayload = () => {
+        if (!hasWordStyleChanges) return {};
+        const changedKeys = Object.keys(wordStyleJson).filter(
+            key => (wordStyleJson[key] || '').trim() !== (wordStyleOriginal[key] || '').trim()
+        );
+        if (!changedKeys.length) return {};
+        const labels = {
+            metadata: 'Identidad',
+            visibility: 'Galería',
+            font: 'Fuente avanzada',
+            paragraph: 'Párrafo avanzado',
+            list: 'Listas',
+            table: 'Tablas',
+        };
+        const payload = {};
+        for (const key of changedKeys) {
+            const result = parseJsonObjectSection(labels[key] || key, wordStyleJson[key]);
+            if (result.error) {
+                onStatusMessage?.(result.error, 'error');
+                return null;
+            }
+            if (result.value !== null) {
+                payload[key] = result.value;
+            }
+        }
+        return payload;
+    };
+
     const handleSave = () => {
         const fontChanges = diffKeys(localFont, baselineFont);
         const paraChanges = diffKeys(localParagraph, baselineParagraph);
         const tableChanges = diffKeys(localTable, baselineTable);
         const hasDiff = fontChanges.length > 0 || paraChanges.length > 0 || tableChanges.length > 0;
-        if (!hasDiff && !hasAdvancedChanges) return;
+        if (!hasDiff && !hasAdvancedChanges && !hasWordStyleChanges) return;
         if (isGlobalSelection) {
             const updates = {};
             if (fontChanges.length > 0) {
@@ -1137,20 +1351,34 @@ const StyleEditPanel = ({
                 updates.advanced_props = advancedPayload;
             }
         }
+        if (hasWordStyleChanges) {
+            const wordPayload = buildWordStylePayload();
+            if (wordPayload === null) return;
+            if (Object.keys(wordPayload).length) {
+                updates.word_style = wordPayload;
+                if (wordPayload.visibility) {
+                    updates.style_visibility = wordPayload.visibility;
+                }
+            }
+        }
         if (!Object.keys(updates).length) return;
         onUpdate(resolvedStyleName, updates);
     };
 
     const handleManualPreview = () => {
         if (!styleInfo || isGlobalSelection || !onRequestPreview || !resolvedStyleName) return;
-        onRequestPreview(resolvedStyleName, buildPreviewPropsFromState(), { immediate: true, force: true });
+        onRequestPreview(resolvedStyleName, buildPreviewPropsFromState(), {
+            immediate: true,
+            force: true,
+            previewEngine: 'word_native',
+        });
     };
 
     useEffect(() => {
         const handleKeyDown = (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
                 e.preventDefault();
-                if ((hasChanges || hasAdvancedChanges) && !isUpdating) {
+                if ((hasChanges || hasAdvancedChanges || hasWordStyleChanges) && !isUpdating) {
                     handleSave();
                 }
             }
@@ -1158,11 +1386,11 @@ const StyleEditPanel = ({
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isGlobalSelection, hasChanges, hasAdvancedChanges, isUpdating, handleSave]);
+    }, [isGlobalSelection, hasChanges, hasAdvancedChanges, hasWordStyleChanges, isUpdating, handleSave]);
 
     const previewStatusLabel = isPreviewLoading
-        ? (previewImage ? 'Actualizando render de Word...' : 'Renderizando vista real en Word...')
-        : (previewImage ? 'Renderizado real de Word' : 'Vista CSS aproximada (temporal)');
+        ? (previewImage ? 'Actualizando preview Word nativo...' : 'Renderizando preview Word nativo...')
+        : (previewImage ? 'Preview Word nativo listo' : 'Preview interno automatico');
 
     if (!styleInfo) {
         return (
@@ -1179,7 +1407,7 @@ const StyleEditPanel = ({
                     <div className="style-panel-title-row">
                         <h3>{displayStyleName}</h3>
                         <StatusBadge status={styleInfo.status} />
-                        {(hasChanges || hasAdvancedChanges) && <span className="unsaved-indicator">Sin guardar</span>}
+                        {(hasChanges || hasAdvancedChanges || hasWordStyleChanges) && <span className="unsaved-indicator">Sin guardar</span>}
                     </div>
                     <div className="style-panel-meta">
                         {isGlobalSelection ? 'Documento global' : `${styleMeta.category || styleInfo.category || 'estilo'} · ${styleMeta.style_type || styleInfo.style_type || styleInfo.style?.type || 'paragraph'}`}
@@ -1188,7 +1416,7 @@ const StyleEditPanel = ({
                 <button
                     className="save-button sticky-save-button"
                     onClick={handleSave}
-                    disabled={!(hasChanges || hasAdvancedChanges) || isUpdating}
+                    disabled={!(hasChanges || hasAdvancedChanges || hasWordStyleChanges) || isUpdating}
                 >
                     {isUpdating ? <LoadingSpinner size="small" /> : <IconSave />}
                     <span>Guardar Cambios</span>
@@ -1307,6 +1535,11 @@ const StyleEditPanel = ({
                 {fontAvailability.available === false && (
                     <div className="font-availability-warning">
                         Fuente no detectada en este equipo. Se conservará el nombre del template y Word/LibreOffice podría sustituirla visualmente.
+                        {fontAvailability.fallback_font_name && fontAvailability.fallback_available && (
+                            <span className="font-fallback-hint">
+                                {' '}Fallback Word detectado: {fontAvailability.fallback_font_name}.
+                            </span>
+                        )}
                     </div>
                 )}
 
@@ -1915,6 +2148,112 @@ const StyleEditPanel = ({
                 </div>
             )}
 
+            {!isGlobalSelection && (
+                <details className="template-inspection-panel edit-section word-complete-details">
+                    <summary>Word completo</summary>
+                    <div className="advanced-header">
+                        <h4>Propiedades Word</h4>
+                        <button
+                            className="advanced-toggle"
+                            onClick={toggleWordCompleteEditMode}
+                            type="button"
+                            data-testid="template-word-complete-toggle"
+                        >
+                            {wordCompleteEditMode ? 'Cancelar edición' : 'Editar Word completo'}
+                        </button>
+                    </div>
+                    {wordCompleteEditMode && (
+                        <div className="advanced-edit-hint">
+                            Cada sección acepta un objeto JSON.
+                        </div>
+                    )}
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Identidad</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.metadata}
+                                onChange={e => handleWordStyleJsonChange('metadata', e.target.value)}
+                                data-testid="template-word-style-metadata"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.metadata ? <pre>{wordStyleJson.metadata}</pre> : <div className="advanced-empty">Sin metadata Word.</div>
+                        )}
+                    </div>
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Galería</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.visibility}
+                                onChange={e => handleWordStyleJsonChange('visibility', e.target.value)}
+                                data-testid="template-word-style-visibility"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.visibility ? <pre>{wordStyleJson.visibility}</pre> : <div className="advanced-empty">Sin flags de galería.</div>
+                        )}
+                    </div>
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Fuente avanzada</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.font}
+                                onChange={e => handleWordStyleJsonChange('font', e.target.value)}
+                                data-testid="template-word-style-font"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.font ? <pre>{wordStyleJson.font}</pre> : <div className="advanced-empty">Sin fuente avanzada.</div>
+                        )}
+                    </div>
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Párrafo avanzado</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.paragraph}
+                                onChange={e => handleWordStyleJsonChange('paragraph', e.target.value)}
+                                data-testid="template-word-style-paragraph"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.paragraph ? <pre>{wordStyleJson.paragraph}</pre> : <div className="advanced-empty">Sin párrafo avanzado.</div>
+                        )}
+                    </div>
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Listas</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.list}
+                                onChange={e => handleWordStyleJsonChange('list', e.target.value)}
+                                data-testid="template-word-style-list"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.list ? <pre>{wordStyleJson.list}</pre> : <div className="advanced-empty">Sin lista asociada.</div>
+                        )}
+                    </div>
+                    <div className="advanced-subblock">
+                        <div className="advanced-subtitle">Tablas</div>
+                        {wordCompleteEditMode ? (
+                            <textarea
+                                className="advanced-textarea"
+                                value={wordStyleJson.table}
+                                onChange={e => handleWordStyleJsonChange('table', e.target.value)}
+                                data-testid="template-word-style-table"
+                                placeholder="{}"
+                            />
+                        ) : (
+                            wordStyleJson.table ? <pre>{wordStyleJson.table}</pre> : <div className="advanced-empty">Sin tabla avanzada.</div>
+                        )}
+                    </div>
+                </details>
+            )}
+
             <details className="template-inspection-panel edit-section">
                 <summary>Inspección: valores efectivos</summary>
                 <div className="inspection-body">
@@ -1947,7 +2286,7 @@ const StyleEditPanel = ({
                 <div className="edit-section preview-section">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                         <h4>
-                            Vista Previa (Word)
+                            Vista Previa
                             {isPreviewLoading && <span className="preview-status-pill">Renderizando...</span>}
                         </h4>
                         <div className="preview-header-actions">
@@ -1955,10 +2294,10 @@ const StyleEditPanel = ({
                                 className="reload-button"
                                 onClick={handleManualPreview}
                                 disabled={isPreviewLoading}
-                                title="Actualizar vista previa"
+                                title="Renderizar con Microsoft Word nativo"
                             >
                                 {isPreviewLoading ? <LoadingSpinner size="small" /> : <IconRefresh />}
-                                <span>Renderizar</span>
+                                <span>Preview Word nativo</span>
                             </button>
                         </div>
                     </div>
@@ -1969,7 +2308,7 @@ const StyleEditPanel = ({
                                 <div className="loading-overlay-content">
                                     <div className="spinner"></div>
                                     <div className="loading-overlay-text">
-                                        {previewImage ? 'Actualizando preview...' : 'Generando preview real de Word...'}
+                                        {previewImage ? 'Actualizando preview Word nativo...' : 'Generando preview Word nativo...'}
                                     </div>
                                 </div>
                             </div>

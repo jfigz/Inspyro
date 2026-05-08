@@ -4,7 +4,78 @@
 
 > **Doc principal:** `docs/modules/19-mcp-server.md`
 
-> **Última actualización:** 2026-04-28
+> **Última actualización:** 2026-05-08
+
+---
+
+## 2026-05-08 - Cobertura live MCP en `template-binding-bank`
+
+### Contexto
+
+El binding JSON por notebook necesitaba una campaña live que probara que la tool MCP usa el mismo contrato que backend/UI y que los estados degradados no bloquean ejecución.
+
+### Cambios tecnicos
+
+1. `frontend/tests/template-binding-bank.spec.ts` arranca MCP stateful desde la UI y valida `bind_template_to_notebook`, `notebook_load` con binding válido/missing, `update_template_style` con autoexport del JSON y `execute_all_cells` sin bloqueo cuando el JSON falta.
+2. `agent_debug.ps1 template-binding-bank` queda como gate dedicado y deja evidencia en `output/template-binding-bank/<run-id>/summary.{json,md}`.
+3. La documentación del módulo 19 registra el banco como complemento de `mcp-smoke` y `mcp-torture` para cambios en templates MCP.
+
+**Archivos:** `frontend/tests/template-binding-bank.spec.ts`, `agent_debug.ps1`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/agents/quickstart.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-08 - Binding JSON de plantilla notebook-first en MCP
+
+### Contexto
+
+Los agentes necesitaban anidar la plantilla al notebook sin depender de un `template_token` efímero ni de mirrors DOCX legacy. El MCP ahora consume el mismo binding JSON portable que usa backend/UI.
+
+### Cambios tecnicos
+
+1. `bind_template_to_notebook(kernel_id, path?, template_json_path?)` llama a `POST /api/templates/bind`, escribe el JSON portable y devuelve `binding`, `notebook` y `template_binding`.
+2. `notebook_create` y `notebook_load` devuelven `template_binding`; además, `notebook_create` envía `path/cwd` al backend para permitir herencia opcional del default de workspace.
+3. `upload_template`, `get_template_info` y `update_template_style` propagan `template_binding` para que clientes IA detecten estados `bound`, `missing` o `error` sin consultar la UI.
+4. `activity.py` clasifica `bind_template_to_notebook` como mutación de template para que el feed/espejo MCP mantenga la semántica existente.
+
+**Archivos:** `backend/mcp_server/tools/templates.py`, `backend/mcp_server/tools/notebook.py`, `backend/mcp_server/activity.py`, `backend/tests/test_template_binding.py`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-06 - MCP notebook-first session-scoped, nbformat-safe y remediación DOCX
+
+### Contexto
+
+Los agentes necesitaban que el flujo oficial Inspyro por MCP no dependiera de vías alternativas cuando hubiera celdas documentales, notebooks cargados en otra sesión o pérdida parcial de estado. La misma remediación corrige falsos positivos DOCX, resolución de paths relativos, diagnóstico de calidad y metadata visual Workbench.
+
+### Cambios tecnicos
+
+1. `InspyroBridge.get(..., websocket_scope="notebook")` crea instancias separadas por `(session_id, scope)` y prefiere `INSPYRO_BACKEND_NOTEBOOK_WS_URL` (`/ws/notebook`) con fallback advertido a `/ws`.
+2. Las tools notebook-first capturan `session_id` al inicio y lo propagan a bridge, `session_state`, locks y lifecycle, incluyendo `notebook_sync_cells`, `notebook_save`, `list_cells`, `get_cell`, `find_in_notebook` y mutaciones legacy.
+3. La persistencia MCP migra `cell_type="docx"` a `cell_type="code"` + `metadata.inspyro.cell_kind="docx"` antes de escribir y valida `nbformat`.
+4. `CELL_SOURCE_REQUIRED` ahora devuelve diagnóstico de sesión y notebooks conocidos cuando se omite `source` y no se puede resolver la celda desde el registro session-scoped.
+5. Las rutas relativas de notebooks se resuelven contra el workspace activo mediante el resolver root-aware compartido con file tools.
+6. `_should_emit_docx()` pasa a un detector AST/token-aware: metadata `cell_kind="docx"` manda, `doc_finalize()` y APIs DOCX de alta confianza promocionan celdas legacy, pero `pd.DataFrame(...)` permanece como cálculo normal.
+7. `check_document_quality(source_path="...clean.docx")` devuelve `invalid_quality_selector` cuando se pasa una copia DOCX exportada sin historial, con guidance hacia `artifact_id`, `kernel_id`, `execution_id` o `prepare_document_delivery`.
+8. Los renders Workbench agregan `pages_dir`/`local_path` validados bajo el cache visual, sin cambiar el contrato link-first por `resource_uri`.
+
+**Archivos:** `backend/mcp_server/tools/notebook.py`, `backend/mcp_server/tools/documents.py`, `backend/mcp_server/resources/inspyro_resources.py`, `backend/app/services/docx_render_cache.py`, `backend/mcp_server/bridge.py`, `backend/mcp_server/config.py`, `backend/tests/test_mcp_mirror.py`, `backend/tests/test_mcp_server_remediation.py`, `backend/tests/test_docx_quality.py`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-04 - `execute_all_cells` no crea bloques DOCX vacíos en celdas de cálculo
+
+### Contexto
+
+Los batches mixtos ejecutados por agentes podían activar `emit_docx` para todas las celdas si el lote contenía al menos una celda documental. Eso contaminaba el orden lógico con bloques vacíos de celdas de cálculo y podía ocultar problemas de rehidratación del runtime.
+
+### Cambios tecnicos
+
+1. `_run_batch_execution()` calcula `docx_selected_ids` y `last_docx_cell_id` antes de iterar el lote.
+2. Cada celda recibe `emit_docx` solo si es `cell_type="docx"` o su fuente usa APIs DOCX detectables.
+3. `skip_pdf` se calcula contra la última celda documental, no contra la última celda runnable del lote.
+4. La regresión `test_execute_all_cells_emits_docx_only_for_document_cells` fija que las celdas de código no exportables no generen bloques DOCX.
+
+**Archivos:** `backend/mcp_server/tools/notebook.py`, `backend/tests/test_mcp_mirror.py`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/llm-index.yaml`
 
 ---
 
@@ -16,7 +87,7 @@ Los agentes necesitaban escribir notebooks con celdas documentales explícitas y
 
 ### Cambios tecnicos
 
-1. `notebook_create` y `notebook_sync_cells` aceptan `cell_type="docx"` y lo preservan en notebooks gestionados por MCP.
+1. `notebook_create` y `notebook_sync_cells` aceptan `cell_type="docx"` como tipo lógico y lo exponen a agentes sin persistirlo como tipo Jupyter no estándar.
 2. `list_cells`, `get_cell` y `find_in_notebook` reportan `type="docx"` cuando corresponde, incluyendo migración suave desde fuentes legacy con APIs DOCX detectables.
 3. `execute_all_cells(include_docx=false)` omite celdas DOCX, devuelve `skipped_docx_cell_ids` y no fuerza `emit_docx`; `execute_cell(include_docx=false)` responde `status="skipped"` para celdas DOCX sin enviar ejecución WS.
 4. `_should_emit_docx()` queda como compatibilidad para notebooks antiguos o fuentes sin metadata, mientras `cell_type="docx"` es la marca preferida para autoría nueva.

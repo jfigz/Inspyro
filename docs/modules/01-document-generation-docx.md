@@ -1,10 +1,18 @@
 ﻿# Generación de Documentos DOCX/PDF
 
 > **Estado:** ✅ Modularizado  
-> **Última actualización:** 2026-05-02
+> **Última actualización:** 2026-05-06
 > **Changelog:** `docs/changelog/01-document-generation-docx.md`
 
 Este documento cubre todo el pipeline de generación de documentos: desde la creación de DOCX hasta la conversión a PDF.
+
+## Runtime Word-first de plantillas (2026-05-04)
+
+- Cuando `DocxSession` usa una plantilla `.docx` como base runtime, conserva estilos, encabezados, pies y propiedades de sección, pero elimina el body de la plantilla antes de insertar contenido generado. Esto evita que placeholders o texto del template contaminen el informe final.
+- Los helpers públicos de `math_to_docx` (`doc_start_cell`, `doc_finish_cell`, `doc_clear_cell`, `notebook_*`) resuelven la sesión desde el namespace llamador del notebook, no desde el módulo wrapper. Así `doc_reset(hard=True)` dentro de una celda no rompe el tracking de bloques ni deja mapas vacíos al exportar.
+- `_fast_rebuild_document()` ahora conserva el cuerpo actual si detecta bloques con contenido que no puede rehidratar desde elementos vivos o snapshots serializados; el fallback evita exportar un DOCX vacío cuando todavía existe contenido válido en memoria.
+- Las tablas generadas sin `style=` siguen resolviendo el slot semántico `table_default`; cuando ese slot se asigna desde una tabla de muestra estilo-derivada, el runtime usa el estilo Word real y conserva `table_style_runtime_defaults` sin depender de formato directo pegado a la tabla del template.
+- La regresión real se cubre con plantillas que tienen body propio, header/footer y celdas notebook que reinician la sesión antes de generar contenido.
 
 ## Delimitadores LaTeX anidados en OMML (2026-05-02)
 
@@ -13,9 +21,9 @@ Este documento cubre todo el pipeline de generación de documentos: desde la cre
 - El contenido promovido a `mfenced` se envuelve como un único `mrow`; así el XSL produce un único operando `m:e` en OMML y evita que Word muestre separadores espurios, apóstrofos visuales o dobles signos dentro de fórmulas.
 - La cobertura mantiene compatibilidad con matrices, `cases`, delimitadores angulares y operadores n-arios dentro de fences complejos.
 
-## Celdas DOCX nativas en notebooks (2026-04-28)
+## Celdas DOCX lógicas en notebooks (2026-05-06)
 
-- Las celdas que escriben o mutan el informe DOCX se formalizan como `cell_type: "docx"` en `.ipynb`; siguen ejecutándose como Python, pero su tipo expresa intención documental.
+- Las celdas que escriben o mutan el informe DOCX se formalizan como tipo lógico `docx`; siguen ejecutándose como Python, pero en disco se guardan como `cell_type: "code"` + `metadata.inspyro.cell_kind: "docx"` para mantener `.ipynb` estándar.
 - `emit_docx` conserva su rol de modo documental de la corrida/batch y no se reduce a “la celda es DOCX”: la detección por fuente (`build_doc`, `doc_reset`, `math_latex`, etc.) sigue activa para notebooks legacy y clientes MCP sin metadata.
 - Apagar DOCX/PDF o ejecutar MCP con `include_docx=false` solo omite esas celdas; no limpia `mdoc`, no borra bloques existentes y no invalida el último DOCX/PDF visible. La próxima corrida documental real vuelve a reemplazar el artefacto mediante el pipeline latest-wins.
 
@@ -26,9 +34,9 @@ Este documento cubre todo el pipeline de generación de documentos: desde la cre
 - `docx_quality/workbench.py` expone operaciones tipadas (`audit`, `render_manifest`, `render_page`, `render_all_pages`, `clear_render_cache`, `clean`, `prepare_delivery`, `comments_*`, `redlines_*`, `fields_*`, `redact`, `protect`, `content_controls_*`, `diff`) y siempre conserva el artefacto original inmutable. Las operaciones que modifican contenido generan variantes nuevas con trazabilidad, resources y summary persistido.
 - La auditoría v2 usa perfiles `quick`, `agent`, `delivery`, `visual` y `publishing`; cada finding queda normalizado con `severity`, `code`, `section`, `location`, `suggestion`, `source` y `fixable`, más conteos estables y score. La revisión de hyperlinks marca texto genérico incluso en variantes acentuadas como `aquí`.
 - El render visual sigue siendo Inspyro-native: DOCX -> PDF con `pdf_converter.py` y PDF -> PNG con PyMuPDF. `docx_render_cache.py` persiste el PDF por `binary_hash + renderer_signature + profile`, rasteriza PNGs por página/zoom bajo demanda y evita reconvertir el mismo binario al inspeccionar varias páginas. No se usa `artifact-tool`.
-- El builder incorpora mejoras de entrega sin sobrecargar la API: `image(..., alt_text=...)`, `figure(..., alt_text=...)`, tablas con header row repetible, anchos/padding/alineación explícitos y `doc_finalize(profile="delivery")` como postproceso local de revisión.
+- El builder incorpora mejoras de entrega sin sobrecargar la API: `image(..., alt_text=...)`, `figure(..., alt_text=...)`, tablas con header row repetible, anchos/padding/alineación explícitos y `doc_finalize(profile="delivery")` como postproceso local de revisión. `doc_finalize()` se exporta desde `docx_builder`, se reexporta desde `math_to_docx` y queda disponible en el preámbulo notebook.
 - Los endpoints legacy `/api/docx/quality/*` quedan compatibles; el contrato nuevo es `/api/docx/workbench/*`, con results/resources link-first y sin blobs inline salvo descargas explícitas.
-- Los resources Workbench/render validan `workbench_id`/`render_id` como segmentos seguros y comprueban que la ruta resuelta permanezca dentro del store/cache antes de servir bytes, de modo que handles traversal o rutas inesperadas fallan sin leer fuera del directorio controlado.
+- Los resources Workbench/render validan `workbench_id`/`render_id` como segmentos seguros y comprueban que la ruta resuelta permanezca dentro del store/cache antes de servir bytes, de modo que handles traversal o rutas inesperadas fallan sin leer fuera del directorio controlado. Los manifests/renders exponen `pages_dir` y `local_path` validados para depuración local, manteniendo `resource_uri` como contrato principal y sin devolver PNG/base64 inline.
 
 ---
 
@@ -1230,6 +1238,7 @@ _SOFFICE_PATH = shutil.which('soffice') or shutil.which('libreoffice')
 - La clave estable combina `binary_hash`, firma del renderer (`pdf_converter.py`, motor Word/LibreOffice registrado) y perfil de render.
 - Si el PDF canónico ya existe, `render_page` solo rasteriza la página faltante con PyMuPDF; no vuelve a llamar Word/LibreOffice.
 - `render_manifest` reporta `page_count`, páginas cacheadas, motor usado, timings, hashes y `resource_uri`; `render_all_pages` queda como acción explícita de preparación visual.
+- El manifest incluye `pages_dir` y cada `page_resource`/`rendered_pages` puede incluir `local_path` validado bajo `INSPYRO_DOCX_RENDER_CACHE_DIR`; los clientes no deben inferir rutas con `cache_dir + name`.
 - `get_docx_render_resource()` rechaza `render_id` o nombres no seguros y vuelve a comprobar que el directorio/base resuelto esté bajo `INSPYRO_DOCX_RENDER_CACHE_DIR` antes de entregar PDF/PNG.
 
 ### Aislamiento de Perfil LibreOffice

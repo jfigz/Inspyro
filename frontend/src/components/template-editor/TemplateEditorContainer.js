@@ -11,6 +11,7 @@ import {
     IconKebab,
     IconQuality,
     IconRefresh,
+    IconSave,
     IconSettings,
     IconSource,
     IconTable,
@@ -45,6 +46,20 @@ const PREVIEW_CACHE_MAX = 48;  // Maximum number of cached preview images
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const TEMPLATE_EXPORT_COMPAT_VERSIONS = new Set(['1.0', '1.1']);
 const STYLE_BROWSER_ORDER = ['titles', 'headings', 'body', 'lists', 'tables', 'code', 'captions', 'other'];
+
+const getTemplateBindingDisplay = (templateBinding = null) => {
+    const status = typeof templateBinding?.status === 'string' ? templateBinding.status : 'none';
+    if (['bound', 'applied', 'updated', 'available', 'inherited'].includes(status)) {
+        return { label: 'Vinculada', className: 'bound', badgeStatus: 'defined' };
+    }
+    if (status === 'missing') {
+        return { label: 'Perdida', className: 'missing', badgeStatus: 'missing' };
+    }
+    if (status === 'error') {
+        return { label: 'Error de plantilla', className: 'error', badgeStatus: 'missing' };
+    }
+    return { label: 'Sin plantilla vinculada', className: 'none', badgeStatus: 'inherited' };
+};
 
 const extractUploadErrorMessage = async (response, fallbackLabel = 'Error al subir plantilla') => {
     try {
@@ -326,6 +341,30 @@ const buildStyleBaseKey = (category, styleInfo = {}) => {
 
 const getStyleSelectionKey = (styleInfo = {}) => {
     return styleInfo?.selection_key || buildStyleBaseKey(styleInfo?.category, styleInfo);
+};
+
+const isHiddenStyleEntry = (styleInfo = {}) => {
+    const style = styleInfo?.style || styleInfo || {};
+    const visibility = style?.style_visibility || style?.word_style?.visibility || {};
+    return Boolean(
+        styleInfo?.hidden
+        || style?.hidden
+        || visibility.hidden
+        || visibility.semi_hidden
+        || style?.semi_hidden
+    );
+};
+
+const getStyleStableSignature = (styleInfo = {}) => {
+    if (!styleInfo) return '';
+    const style = styleInfo?.style || {};
+    return [
+        getStyleSelectionKey(styleInfo),
+        styleInfo?.status || '',
+        styleInfo?.style_type || style?.type || '',
+        styleInfo?.category || style?.category || '',
+        style?.style_id || styleInfo?.style_id || '',
+    ].join('|');
 };
 
 const getSemanticSlotOptions = (slotName, styleBrowser) => {
@@ -753,6 +792,134 @@ const StatusBadge = ({ status }) => {
     );
 };
 
+const normalizePreviewColor = (value, fallback = null) => {
+    if (!value) return fallback;
+    const cleaned = String(value).replace('#', '').trim();
+    if (!cleaned) return fallback;
+    return `#${cleaned.slice(0, 6)}`;
+};
+
+const mapParagraphAlignment = (value) => {
+    const normalized = String(value || '').trim().toUpperCase();
+    if (normalized === 'CENTER') return 'center';
+    if (normalized === 'RIGHT') return 'right';
+    if (normalized === 'JUSTIFY' || normalized === 'BOTH') return 'justify';
+    return 'left';
+};
+
+const mapLineHeight = (paragraph = {}) => {
+    const rule = String(paragraph.line_spacing_rule || '').trim().toUpperCase();
+    if (rule === 'DOUBLE') return 2;
+    if (rule === 'ONE_POINT_FIVE') return 1.5;
+    if (rule === 'SINGLE') return 1.15;
+    const numeric = Number(paragraph.line_spacing);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 1.35;
+};
+
+const buildInternalTextStyle = (font = {}, paragraph = {}) => {
+    const fontSize = readFontSize(font);
+    const decorations = [
+        font.underline ? 'underline' : '',
+        font.strike ? 'line-through' : '',
+    ].filter(Boolean);
+    return {
+        fontFamily: readFontName(font) || 'Calibri, Arial, sans-serif',
+        fontSize: fontSize ? `${fontSize}pt` : '11pt',
+        fontWeight: font.bold ? 700 : 400,
+        fontStyle: font.italic ? 'italic' : 'normal',
+        color: normalizePreviewColor(font.color_rgb, '#111827'),
+        backgroundColor: font.highlight_color ? getHighlightCssColor(font.highlight_color) : 'transparent',
+        textDecoration: decorations.join(' ') || 'none',
+        textTransform: font.all_caps ? 'uppercase' : 'none',
+        fontVariant: font.small_caps ? 'small-caps' : 'normal',
+        textAlign: mapParagraphAlignment(paragraph.alignment),
+        lineHeight: mapLineHeight(paragraph),
+        marginTop: paragraph.space_before_pt != null ? `${Number(paragraph.space_before_pt) || 0}pt` : '0',
+        marginBottom: paragraph.space_after_pt != null ? `${Number(paragraph.space_after_pt) || 0}pt` : '8pt',
+        marginLeft: paragraph.left_indent_inches != null ? `${Number(paragraph.left_indent_inches) || 0}in` : '0',
+        marginRight: paragraph.right_indent_inches != null ? `${Number(paragraph.right_indent_inches) || 0}in` : '0',
+        textIndent: paragraph.first_line_indent_inches != null ? `${Number(paragraph.first_line_indent_inches) || 0}in` : '0',
+    };
+};
+
+const borderStyleFromWord = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized.includes('dash')) return 'dashed';
+    if (normalized.includes('dot')) return 'dotted';
+    if (normalized === 'none' || normalized === 'nil') return 'none';
+    if (normalized === 'double') return 'double';
+    return 'solid';
+};
+
+const TemplateInternalPreview = ({
+    styleName,
+    font,
+    paragraph,
+    styleType,
+    category,
+    tableFormat,
+}) => {
+    const textStyle = buildInternalTextStyle(font, paragraph);
+    const normalizedType = String(styleType || '').toLowerCase();
+    const normalizedCategory = String(category || '').toLowerCase();
+    const isTable = normalizedType === 'table';
+    const isList = normalizedCategory === 'lists';
+    const isCaption = normalizedCategory === 'captions' || String(styleName || '').toLowerCase() === 'caption';
+    const isCode = normalizedCategory === 'code';
+    const isHeading = normalizedCategory === 'headings';
+    const tableBorderColor = normalizePreviewColor(tableFormat?.border_color || tableFormat?.table_border_color, '#94a3b8');
+    const tableBorderWidth = Number(tableFormat?.border_size_pt ?? tableFormat?.table_border_size_pt ?? 0.75) || 0.75;
+    const tableShading = normalizePreviewColor(tableFormat?.shading_color || tableFormat?.table_shading_color, '#f8fafc');
+    const cellPaddingY = Number(tableFormat?.cell_margin_top_pt ?? tableFormat?.table_cell_margin_top_pt ?? 4) || 4;
+    const cellPaddingX = Number(tableFormat?.cell_margin_left_pt ?? tableFormat?.table_cell_margin_left_pt ?? 6) || 6;
+    const sampleText = isCaption
+        ? 'Figura 1. Texto de ejemplo'
+        : isHeading
+            ? (styleName || 'Encabezado de ejemplo')
+            : 'El veloz murcielago hindu comia feliz cardillo y kiwi.';
+
+    return (
+        <div className="template-internal-preview" data-testid="template-internal-preview">
+            <div className="template-internal-page">
+                {isTable ? (
+                    <table
+                        className="template-internal-table"
+                        style={{
+                            ...textStyle,
+                            borderColor: tableBorderColor,
+                            '--template-table-border': `${tableBorderWidth}pt ${borderStyleFromWord(tableFormat?.border_style || tableFormat?.table_border_style)} ${tableBorderColor}`,
+                            '--template-table-header-bg': tableShading,
+                            '--template-table-cell-padding': `${cellPaddingY}pt ${cellPaddingX}pt`,
+                        }}
+                    >
+                        <tbody>
+                            {[0, 1, 2].map((rowIndex) => (
+                                <tr key={rowIndex}>
+                                    {[0, 1, 2].map((colIndex) => (
+                                        <td key={`${rowIndex}-${colIndex}`}>
+                                            {rowIndex === 0 ? `Columna ${colIndex + 1}` : `Fila ${rowIndex}.${colIndex + 1}`}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                ) : isList ? (
+                    <ul className="template-internal-list" style={textStyle}>
+                        <li>Primer item con el estilo seleccionado</li>
+                        <li>Segundo item para revisar sangria</li>
+                        <li>Tercer item con interlineado visible</li>
+                    </ul>
+                ) : isCode ? (
+                    <pre className="template-internal-code" style={textStyle}>{'for carga in cargas:\n    revisar(carga)'}</pre>
+                ) : (
+                    <p className="template-internal-paragraph" style={textStyle}>{sampleText}</p>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const StyleCard = ({ styleInfo, isSelected, onClick }) => {
     const { name, status, description, style } = styleInfo;
     const font = getEffectiveStyleFont(style);
@@ -989,6 +1156,7 @@ const PageSetupPanel = ({ pageSetup, onUpdate }) => {
 
 const TemplateEditor = ({
     templateInfo,
+    templateBinding = null,
     kernelId,
     sendMessage,
     lastMessage,
@@ -996,6 +1164,7 @@ const TemplateEditor = ({
     onTemplateChange,
     onStatusMessage,
     onTemplateUpload,
+    onTemplateBind,
     isOpeningPersistedTemplate = false,
 }) => {
     const [selectedStyle, setSelectedStyle] = useState(null);
@@ -1003,10 +1172,12 @@ const TemplateEditor = ({
     const [semanticSlotSelections, setSemanticSlotSelections] = useState({});
     const [isUpdating, setIsUpdating] = useState(false);
     const [isUploadingTemplate, setIsUploadingTemplate] = useState(false);
+    const [isBindingTemplate, setIsBindingTemplate] = useState(false);
     const [showInfo, setShowInfo] = useState(false);
     const [sidebarMode, setSidebarMode] = useState('slots');
     const [selectedSemanticSlotName, setSelectedSemanticSlotName] = useState('body');
     const [searchTerm, setSearchTerm] = useState('');  // FIX #21: Style search
+    const [showHiddenStyles, setShowHiddenStyles] = useState(false);
 
     const templateInputRef = useRef(null);
     const templateJsonInputRef = useRef(null);
@@ -1025,6 +1196,9 @@ const TemplateEditor = ({
         template_apply_table_format: null,
         template_create_style_from_table: null,
     });
+    const hasPendingTemplateAction = useCallback(() => (
+        Object.values(pendingActionRequestsRef.current || {}).some(Boolean)
+    ), []);
 
     const {
         previewImage,
@@ -1109,6 +1283,15 @@ const TemplateEditor = ({
         () => styleBrowser?.categories || {},
         [styleBrowser]
     );
+    const visibleBrowserCategories = useMemo(() => {
+        if (showHiddenStyles) return browserCategories;
+        return Object.fromEntries(
+            Object.entries(browserCategories).map(([categoryKey, entries]) => [
+                categoryKey,
+                (entries || []).filter((entry) => !isHiddenStyleEntry(entry)),
+            ])
+        );
+    }, [browserCategories, showHiddenStyles]);
     const browserCategoryOrder = useMemo(
         () => styleBrowser?.category_order || STYLE_BROWSER_ORDER,
         [styleBrowser]
@@ -1260,13 +1443,18 @@ const TemplateEditor = ({
         const requestId = nextActionRequestId('tpl_slots');
         pendingActionRequestsRef.current.template_update_semantic_slots = requestId;
         setIsUpdating(true);
-        sendMessage({
+        const sent = sendMessage({
             type: WS_MSG.TEMPLATE_UPDATE_SEMANTIC_SLOTS,
             request_id: requestId,
             kernel_id: kernelId,
             semantic_style_slots: serializeSemanticSlotSelections(nextSelections, sourceTemplate),
         });
-    }, [kernelId, nextActionRequestId, sendMessage, serializeSemanticSlotSelections, templateInfo]);
+        if (sent === false) {
+            pendingActionRequestsRef.current.template_update_semantic_slots = null;
+            setIsUpdating(false);
+            onStatusMessage?.('No se pudo enviar la actualización de slots. Revisa la conexión del editor de plantillas.', 'error');
+        }
+    }, [kernelId, nextActionRequestId, onStatusMessage, sendMessage, serializeSemanticSlotSelections, templateInfo]);
 
     const resolveImportedSemanticSlots = useCallback((rawImportPayload, sourceTemplate) => {
         if (!rawImportPayload || !sourceTemplate) return {};
@@ -1298,8 +1486,44 @@ const TemplateEditor = ({
         return mapped;
     }, [resolveSemanticSlotEntry]);
 
-    // Document tables - tables found in the uploaded template with direct formatting
-    const documentTables = useMemo(() => templateInfo?.document_tables || [], [templateInfo]);
+    const documentTables = useMemo(() => {
+        const rawTables = Array.isArray(templateInfo?.document_tables) ? templateInfo.document_tables : [];
+        const tableOptions = browserCategories?.tables || [];
+        return rawTables.map((table) => {
+            const sourceStyleId = String(table?.style_id || table?.source_style_id || '').trim();
+            const sourceStyleName = String(
+                table?.style_display_name
+                || table?.style_name
+                || table?.source_style_name
+                || ''
+            ).trim();
+            const sourceStyleNameLower = sourceStyleName.toLowerCase();
+            const sourceEntry = tableOptions.find((option) => {
+                const optionStyleId = String(option?.style?.style_id || option?.style_id || '').trim();
+                const optionName = String(option?.style?.name || option?.name || '').trim().toLowerCase();
+                const optionDisplayName = String(option?.style?.display_name || option?.display_name || '').trim().toLowerCase();
+                return (
+                    (sourceStyleId && optionStyleId === sourceStyleId)
+                    || (sourceStyleNameLower && (
+                        optionName === sourceStyleNameLower
+                        || optionDisplayName === sourceStyleNameLower
+                    ))
+                );
+            });
+            return {
+                ...table,
+                source_style_selection_key: sourceEntry ? getStyleSelectionKey(sourceEntry) : null,
+                source_style_display_name: (
+                    sourceEntry?.display_name
+                    || sourceEntry?.style?.display_name
+                    || sourceEntry?.style?.name
+                    || sourceStyleName
+                    || sourceStyleId
+                    || null
+                ),
+            };
+        });
+    }, [browserCategories, templateInfo]);
     const templateContentControls = useMemo(
         () => (templateInfo?.content_controls && typeof templateInfo.content_controls === 'object' ? templateInfo.content_controls : null),
         [templateInfo]
@@ -1366,6 +1590,38 @@ const TemplateEditor = ({
         onStatusMessage,
     });
 
+    const applyAuthoritativeTemplatePayload = useCallback((incomingTemplate, options = {}) => {
+        if (!incomingTemplate) return;
+        const {
+            refreshSelection = true,
+            clearPreview = true,
+            skipNextReset = false,
+        } = options;
+
+        if (skipNextReset) {
+            skipNextTemplateInfoResetRef.current = true;
+        }
+        if (clearPreview) {
+            resetStylePreviewPipeline({ clearCache: true, clearImage: true });
+            resetTablePreviewState();
+        }
+        if (onTemplateChange) {
+            onTemplateChange(incomingTemplate);
+        }
+        if (refreshSelection) {
+            const refreshedSelection = resolveStyleSelection(selectedStyle, incomingTemplate);
+            if (refreshedSelection) {
+                setSelectedStyle(refreshedSelection);
+            }
+        }
+    }, [
+        onTemplateChange,
+        resetStylePreviewPipeline,
+        resetTablePreviewState,
+        resolveStyleSelection,
+        selectedStyle,
+    ]);
+
     const resolvedCategorySelections = useMemo(() => {
         const nextSelections = {};
         browserCategoryOrder.forEach((categoryKey) => {
@@ -1395,20 +1651,20 @@ const TemplateEditor = ({
 
     // FIX #21: Filter categories by search term
     const filteredBrowserCategoryKeys = useMemo(() => {
-        const categoriesWithOptions = browserCategoryOrder.filter((categoryKey) => (browserCategories[categoryKey] || []).length > 0);
+        const categoriesWithOptions = browserCategoryOrder.filter((categoryKey) => (visibleBrowserCategories[categoryKey] || []).length > 0);
         if (!searchTerm.trim()) return categoriesWithOptions;
 
         const lowerSearch = searchTerm.toLowerCase();
         return categoriesWithOptions.filter((categoryKey) => {
             const categoryLabel = CATEGORY_LABELS[categoryKey]?.label || categoryKey;
             if (categoryLabel.toLowerCase().includes(lowerSearch)) return true;
-            return (browserCategories[categoryKey] || []).some((styleInfo) => (
+            return (visibleBrowserCategories[categoryKey] || []).some((styleInfo) => (
                 styleInfo?.name?.toLowerCase().includes(lowerSearch)
                 || styleInfo?.display_name?.toLowerCase().includes(lowerSearch)
                 || styleInfo?.description?.toLowerCase().includes(lowerSearch)
             ));
         });
-    }, [browserCategories, browserCategoryOrder, searchTerm]);
+    }, [visibleBrowserCategories, browserCategoryOrder, searchTerm]);
 
     useEffect(() => {
         if (!templateInfo) {
@@ -1475,11 +1731,7 @@ const TemplateEditor = ({
             const activeStyleKey = selectedStyle ? getStyleSelectionKey(selectedStyle) : null;
             const isSameSlotStyle =
                 activeSlotKey === activeStyleKey &&
-                selectedStyle?.status === selectedSemanticSlotEntry.status &&
-                selectedStyle?.display_name === selectedSemanticSlotEntry.display_name &&
-                selectedStyle?.style_type === selectedSemanticSlotEntry.style_type &&
-                selectedStyle?.category === selectedSemanticSlotEntry.category &&
-                selectedStyle?.style === selectedSemanticSlotEntry.style;
+                getStyleStableSignature(selectedStyle) === getStyleStableSignature(selectedSemanticSlotEntry);
             if (!isSameSlotStyle) {
                 setSelectedStyle(selectedSemanticSlotEntry);
             }
@@ -1693,6 +1945,10 @@ const TemplateEditor = ({
                     onStatusMessage?.(`Plantilla aplicada al kernel.${detail} Reejecuta la celda para regenerar DOCX/PDF con el formato actualizado.`, 'success');
                 }
             }
+            applyAuthoritativeTemplatePayload(lastMessage.template, {
+                refreshSelection: !pendingImportedSemanticSlotsRef.current,
+                clearPreview: true,
+            });
             if (pendingImportedSemanticSlotsRef.current && lastMessage.template) {
                 const importedSlots = resolveImportedSemanticSlots(
                     pendingImportedSemanticSlotsRef.current,
@@ -1732,12 +1988,20 @@ const TemplateEditor = ({
                 pendingActionRequestsRef.current.template_update_style = null;
                 setIsUpdating(false);
             }
+            applyAuthoritativeTemplatePayload(lastMessage.template, {
+                refreshSelection: true,
+                clearPreview: true,
+            });
         } else if (lastMessage.type === WS_MSG.TEMPLATE_DOCUMENT_DEFAULTS_UPDATED) {
             const pendingUpdateId = pendingActionRequestsRef.current.template_update_document_defaults;
             if (!pendingUpdateId || !messageRequestId || pendingUpdateId === messageRequestId) {
                 pendingActionRequestsRef.current.template_update_document_defaults = null;
                 setIsUpdating(false);
             }
+            applyAuthoritativeTemplatePayload(lastMessage.template, {
+                refreshSelection: true,
+                clearPreview: true,
+            });
         } else if (lastMessage.type === WS_MSG.TEMPLATE_SEMANTIC_SLOTS_UPDATED) {
             const pendingUpdateId = pendingActionRequestsRef.current.template_update_semantic_slots;
             if (!pendingUpdateId || !messageRequestId || pendingUpdateId === messageRequestId) {
@@ -1823,9 +2087,16 @@ const TemplateEditor = ({
             }
             onStatusMessage?.(lastMessage.error || lastMessage.message || 'Error en operación de plantilla.', 'error');
         }
+        if (lastMessage.type === WS_MSG.TEMPLATE_SEMANTIC_SLOTS_UPDATED && lastMessage.template) {
+            applyAuthoritativeTemplatePayload(lastMessage.template, {
+                refreshSelection: true,
+                clearPreview: true,
+            });
+        }
     }, [
         lastMessage,
         selectedStyle,
+        applyAuthoritativeTemplatePayload,
         cachePreview,
         onStatusMessage,
         onTemplateChange,
@@ -1864,14 +2135,19 @@ const TemplateEditor = ({
         const normalizedUpdates = styleId && !updates?.style_id
             ? { ...updates, style_id: styleId }
             : updates;
-        sendMessage({
+        const sent = sendMessage({
             type: WS_MSG.TEMPLATE_UPDATE_STYLE,
             request_id: requestId,
             kernel_id: kernelId,
             style_name: styleName,
             updates: normalizedUpdates,
         });
-    }, [kernelId, nextActionRequestId, selectedStyle, sendMessage]);
+        if (sent === false) {
+            pendingActionRequestsRef.current.template_update_style = null;
+            setIsUpdating(false);
+            onStatusMessage?.('No se pudo enviar la actualización de estilo. Revisa la conexión del editor de plantillas.', 'error');
+        }
+    }, [kernelId, nextActionRequestId, onStatusMessage, selectedStyle, sendMessage]);
 
     const handleDocumentDefaultsUpdate = useCallback((updates) => {
         if (!sendMessage || !kernelId) return;
@@ -1879,13 +2155,18 @@ const TemplateEditor = ({
         const requestId = nextActionRequestId('tpl_global');
         pendingActionRequestsRef.current.template_update_document_defaults = requestId;
         setIsUpdating(true);
-        sendMessage({
+        const sent = sendMessage({
             type: WS_MSG.TEMPLATE_UPDATE_DOCUMENT_DEFAULTS,
             request_id: requestId,
             kernel_id: kernelId,
             updates,
         });
-    }, [sendMessage, kernelId, nextActionRequestId]);
+        if (sent === false) {
+            pendingActionRequestsRef.current.template_update_document_defaults = null;
+            setIsUpdating(false);
+            onStatusMessage?.('No se pudo enviar la actualización global. Revisa la conexión del editor de plantillas.', 'error');
+        }
+    }, [sendMessage, kernelId, nextActionRequestId, onStatusMessage]);
 
     const handleSemanticSlotActivate = useCallback((slotName, selectionKeyOverride = null) => {
         const slotDef = SEMANTIC_SLOT_BY_NAME[slotName];
@@ -1917,6 +2198,13 @@ const TemplateEditor = ({
         setSelectedStyle(resolvedEntry || null);
     }, [persistSemanticSlotSelections, resolveStyleEntry, semanticSlotSelections, templateInfo]);
 
+    const handleUseTableSourceStyleAsDefault = useCallback((table) => {
+        const selectionKey = table?.source_style_selection_key;
+        if (!selectionKey) return;
+        setSidebarMode('slots');
+        handleSemanticSlotChange('table_default', selectionKey);
+    }, [handleSemanticSlotChange]);
+
     const resetTemplateInputs = useCallback(() => {
         if (templateInputRef.current) {
             templateInputRef.current.value = '';
@@ -1930,7 +2218,7 @@ const TemplateEditor = ({
         const importedSemanticSlots = options?.importedSemanticSlots && typeof options.importedSemanticSlots === 'object'
             ? options.importedSemanticSlots
             : null;
-        if (!file || !sendMessage || !kernelId) return false;
+        if (!file || !kernelId || typeof onTemplateUpload !== 'function') return false;
 
         const fileName = String(file.name || '').toLowerCase();
         if (!fileName.endsWith('.docx')) {
@@ -1967,7 +2255,7 @@ const TemplateEditor = ({
             resetTemplateInputs();
         };
 
-        const attachLegacyViaWs = () => {
+        const handoffLegacyUpload = () => {
             const reader = new FileReader();
             reader.onload = () => {
                 const base64 = typeof reader.result === 'string' ? reader.result.split(',')[1] : null;
@@ -1975,13 +2263,7 @@ const TemplateEditor = ({
                     failUpload('Error leyendo archivo de plantilla');
                     return;
                 }
-                onTemplateUpload?.({ legacyBase64: base64 });
-                sendMessage({
-                    type: WS_MSG.TEMPLATE_UPLOAD,
-                    request_id: requestId,
-                    kernel_id: kernelId,
-                    docx_base64: base64
-                });
+                onTemplateUpload?.({ legacyBase64: base64, requestId });
             };
             reader.onerror = () => {
                 failUpload('Error leyendo archivo de plantilla');
@@ -2004,7 +2286,7 @@ const TemplateEditor = ({
             }
 
             onStatusMessage?.('Upload REST no disponible; usando fallback WS por compatibilidad', 'warning');
-            attachLegacyViaWs();
+            handoffLegacyUpload();
             return true;
         }
 
@@ -2027,16 +2309,23 @@ const TemplateEditor = ({
             return false;
         }
 
-        onTemplateUpload?.({
-            templateToken,
-            sizeBytes: data?.size_bytes ?? null,
-            sha256: data?.sha256 ?? null,
-        });
-        sendMessage({
+        const sent = sendMessage?.({
             type: WS_MSG.TEMPLATE_ATTACH,
             request_id: requestId,
             kernel_id: kernelId,
             template_token: templateToken,
+        });
+        if (sent === false) {
+            failUpload('No se pudo adjuntar la plantilla al kernel. Revisa la conexiÃ³n del editor de plantillas.');
+            return false;
+        }
+
+        onTemplateUpload?.({
+            templateToken,
+            requestId,
+            sizeBytes: data?.size_bytes ?? null,
+            sha256: data?.sha256 ?? null,
+            attachSent: true,
         });
         return true;
     }, [kernelId, nextActionRequestId, onStatusMessage, onTemplateUpload, resetTemplateInputs, sendMessage]);
@@ -2174,6 +2463,16 @@ const TemplateEditor = ({
         onStatusMessage?.('Template JSON exportado exitosamente', 'success');
     }, [kernelId, onStatusMessage, semanticSlotSelections, serializeSemanticSlotSelections, templateInfo]);
 
+    const handleBindTemplateToNotebook = useCallback(async () => {
+        if (!onTemplateBind || !templateInfo) return;
+        setIsBindingTemplate(true);
+        try {
+            await onTemplateBind();
+        } finally {
+            setIsBindingTemplate(false);
+        }
+    }, [onTemplateBind, templateInfo]);
+
     const handleCategorySelectionChange = useCallback((categoryKey, selectionKey) => {
         const resolvedEntry = resolveStyleEntry(categoryKey, selectionKey, templateInfo);
         if (!resolvedEntry) return;
@@ -2197,8 +2496,10 @@ const TemplateEditor = ({
     // Reset states when template changes
     useEffect(() => {
         setIsUploadingTemplate(false);
-        setIsUpdating(false);
-    }, [templateInfo]);
+        if (!hasPendingTemplateAction()) {
+            setIsUpdating(false);
+        }
+    }, [hasPendingTemplateAction, templateInfo]);
 
     const handleApplyDirectTableFormat = useCallback((tableIndex) => {
         const targetStyleName = selectedStyle?.style?.name || selectedStyle?.display_name || selectedStyle?.name || null;
@@ -2215,7 +2516,7 @@ const TemplateEditor = ({
         const requestId = nextActionRequestId('tpl_apply');
         pendingActionRequestsRef.current.template_apply_table_format = requestId;
         setIsUpdating(true);
-        sendMessage({
+        const sent = sendMessage({
             type: WS_MSG.TEMPLATE_APPLY_TABLE_FORMAT,
             request_id: requestId,
             kernel_id: kernelId,
@@ -2223,11 +2524,17 @@ const TemplateEditor = ({
             target_style_name: targetStyleName,
             target_style_id: targetStyleId,
         });
+        if (sent === false) {
+            pendingActionRequestsRef.current.template_apply_table_format = null;
+            setIsUpdating(false);
+            onStatusMessage?.('No se pudo enviar el formato directo de tabla. Revisa la conexión del editor de plantillas.', 'error');
+            return;
+        }
         setSelectedDirectTable(tableIndex);
         setTimeout(() => {
             setTableGridTab('styles');
         }, 500);
-    }, [selectedStyle, sendMessage, kernelId, nextActionRequestId]);
+    }, [selectedStyle, sendMessage, kernelId, nextActionRequestId, onStatusMessage]);
 
     const selectedStyleDisplayName = selectedStyle?.display_name || selectedStyle?.style?.display_name || selectedStyle?.style?.name || selectedStyle?.name || '';
     const selectedStyleEffectiveFont = useMemo(
@@ -2251,15 +2558,35 @@ const TemplateEditor = ({
                 : null,
         };
     }, [selectedStyle, selectedStyleEffectiveFont, selectedStyleEffectiveParagraph]);
+    const selectedStyleTypeForPreview = selectedStyle?.style?.type || selectedStyle?.style_type || null;
+    const selectedStyleCategoryForPreview = selectedStyle?.category || selectedStyle?.style?.category || null;
+    const selectedStyleTableFormat = useMemo(() => (
+        selectedStyle?.style?.resolved_table_format
+        || selectedStyle?.style?.xml_table_format
+        || {}
+    ), [selectedStyle]);
     const selectedStyleNameForPreview = selectedStyle && selectedStyle.kind !== 'global'
         ? (selectedStyle.style?.name || selectedStyle.name || selectedStyle.display_name)
         : null;
     const handleRailPreview = useCallback(() => {
         if (!selectedStyleNameForPreview || !selectedStylePreviewPayload) return;
-        handleRequestPreview(selectedStyleNameForPreview, selectedStylePreviewPayload, { immediate: true, force: true });
+        handleRequestPreview(selectedStyleNameForPreview, selectedStylePreviewPayload, {
+            immediate: true,
+            force: true,
+            previewEngine: 'word_native',
+        });
     }, [handleRequestPreview, selectedStyleNameForPreview, selectedStylePreviewPayload]);
 
     const templateSecondaryActions = useMemo(() => ([
+        {
+            id: 'bind-template',
+            label: isBindingTemplate ? 'Anidando...' : 'Anidar plantilla',
+            icon: <IconSave />,
+            onClick: handleBindTemplateToNotebook,
+            disabled: !templateInfo || !onTemplateBind || isBindingTemplate,
+            dataTestId: 'template-bind-button',
+        },
+        { type: 'separator' },
         {
             id: 'import-json',
             label: 'Importar JSON',
@@ -2285,7 +2612,7 @@ const TemplateEditor = ({
             disabled: !templateInfo,
             dataTestId: 'template-delete-button',
         },
-    ]), [handleDeleteTemplate, handleExportJSON, handleImportJsonClick, isUploadingTemplate, templateInfo]);
+    ]), [handleBindTemplateToNotebook, handleDeleteTemplate, handleExportJSON, handleImportJsonClick, isBindingTemplate, isUploadingTemplate, onTemplateBind, templateInfo]);
 
     const sidebarTabs = [
         { id: 'slots', label: 'Slots', icon: <IconTemplate /> },
@@ -2305,6 +2632,8 @@ const TemplateEditor = ({
     const previewRailTitle = isSlotsMode && templateInfo
         ? `${selectedSemanticSlot?.label || 'Slot'} -> ${selectedStyleDisplayName || 'Sin estilo asignado'}`
         : (selectedStyleDisplayName || 'Selecciona un estilo');
+    const templateBindingDisplay = getTemplateBindingDisplay(templateBinding);
+    const templateBindingWarning = ['missing', 'error'].includes(String(templateBinding?.status || ''));
 
     return (
         <div className="template-editor-overlay" onClick={onClose}>
@@ -2330,6 +2659,12 @@ const TemplateEditor = ({
                                 </span>
                                 <span className="summary-item missing">
                                     <StatusBadge status="missing" /> {summary.missing} faltantes
+                                </span>
+                                <span
+                                    className={`summary-item template-binding-chip ${templateBindingDisplay.className}`}
+                                    data-testid="template-binding-status"
+                                >
+                                    <StatusBadge status={templateBindingDisplay.badgeStatus} /> {templateBindingDisplay.label}
                                 </span>
                             </div>
                         )}
@@ -2378,6 +2713,13 @@ const TemplateEditor = ({
                         </button>
                     </div>
                 </div>
+
+                {templateBindingWarning && (
+                    <div className={`template-warning-card template-binding-warning ${templateBindingDisplay.className}`} data-testid="template-binding-warning">
+                        <strong>Plantilla JSON {templateBinding?.status === 'missing' ? 'perdida' : 'no aplicable'}:</strong>{' '}
+                        {templateBinding?.message || 'El notebook conserva el vínculo, pero el JSON no pudo cargarse.'}
+                    </div>
+                )}
 
                 {showInfo && (
                     <div className="template-info-panel" onClick={e => e.stopPropagation()}>
@@ -2468,6 +2810,15 @@ const TemplateEditor = ({
                                                 value={searchTerm}
                                                 onChange={e => setSearchTerm(e.target.value)}
                                             />
+                                            <label className="template-hidden-toggle">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={showHiddenStyles}
+                                                    onChange={e => setShowHiddenStyles(e.target.checked)}
+                                                    data-testid="template-show-hidden-styles"
+                                                />
+                                                <span>Mostrar ocultos</span>
+                                            </label>
 
                                             {templateInfo.has_duplicate_styles && (
                                                 <div className="template-warning-card">
@@ -2489,14 +2840,19 @@ const TemplateEditor = ({
                                             <div className="category-browser-list">
                                                 {filteredBrowserCategoryKeys.map((categoryKey) => {
                                                     const isActiveCategory = selectedStyle?.category === categoryKey;
+                                                    const visibleOptions = visibleBrowserCategories[categoryKey] || [];
                                                     const visibleCategorySelection = isActiveCategory
                                                         ? selectedStyle
-                                                        : resolvedCategorySelections[categoryKey];
+                                                        : (
+                                                            visibleOptions.find((entry) => getStyleSelectionKey(entry) === getStyleSelectionKey(resolvedCategorySelections[categoryKey]))
+                                                            || visibleOptions[0]
+                                                            || resolvedCategorySelections[categoryKey]
+                                                        );
                                                     return (
                                                         <CategoryBrowserCard
                                                             key={categoryKey}
                                                             categoryKey={categoryKey}
-                                                            options={browserCategories[categoryKey] || []}
+                                                            options={visibleOptions}
                                                             selectedEntry={visibleCategorySelection}
                                                             coverageItems={coverageCategories[categoryKey] || []}
                                                             isActive={isActiveCategory}
@@ -2724,6 +3080,7 @@ const TemplateEditor = ({
                                 loadingAllTablePreviews={loadingAllTablePreviews}
                                 selectedStyle={selectedStyle}
                                 onSelectTable={setSelectedDirectTable}
+                                onUseSourceStyleAsDefault={handleUseTableSourceStyleAsDefault}
                                 onOpenPreview={(idx, image) => {
                                     if (image) {
                                         setEnlargedTablePreview({ idx, image });
@@ -2739,7 +3096,7 @@ const TemplateEditor = ({
                         <aside className="template-preview-rail scroll-surface" data-testid="template-preview-rail">
                             <div className="template-preview-rail-header">
                                 <div>
-                                    <div className="sidebar-section-label">Preview Word</div>
+                                    <div className="sidebar-section-label">Preview interno</div>
                                     <h3>{previewRailTitle}</h3>
                                 </div>
                                 <button
@@ -2747,10 +3104,11 @@ const TemplateEditor = ({
                                     className="reload-button"
                                     onClick={handleRailPreview}
                                     disabled={!selectedStylePreviewPayload || isPreviewLoading}
-                                    title="Renderizar vista previa"
+                                    title="Renderizar con Microsoft Word nativo"
+                                    data-testid="template-native-word-preview"
                                 >
                                     {isPreviewLoading ? <LoadingSpinner size="small" /> : <IconRefresh />}
-                                    <span>Renderizar</span>
+                                    <span>Preview Word nativo</span>
                                 </button>
                             </div>
 
@@ -2762,7 +3120,7 @@ const TemplateEditor = ({
                                                 <div className="loading-overlay-content">
                                                     <div className="spinner"></div>
                                                     <div className="loading-overlay-text">
-                                                        {previewImage ? 'Actualizando preview...' : 'Generando preview real de Word...'}
+                                                        {previewImage ? 'Actualizando preview Word nativo...' : 'Generando preview Word nativo...'}
                                                     </div>
                                                 </div>
                                             </div>
@@ -2775,25 +3133,20 @@ const TemplateEditor = ({
                                                 className="word-preview-image"
                                             />
                                         ) : (
-                                            <div
-                                                className="live-preview css-fallback"
-                                                style={{
-                                                    fontFamily: readFontName(selectedStyleEffectiveFont) || 'inherit',
-                                                    fontSize: readFontSize(selectedStyleEffectiveFont) ? `${readFontSize(selectedStyleEffectiveFont)}px` : '12px',
-                                                    fontWeight: selectedStyleEffectiveFont?.bold ? 'bold' : 'normal',
-                                                    fontStyle: selectedStyleEffectiveFont?.italic ? 'italic' : 'normal',
-                                                    textDecoration: selectedStyleEffectiveFont?.underline ? 'underline' : 'none',
-                                                    color: selectedStyleEffectiveFont?.color_rgb ? `#${selectedStyleEffectiveFont.color_rgb}` : '#111827',
-                                                }}
-                                            >
-                                                AaBbCc 123
-                                            </div>
+                                            <TemplateInternalPreview
+                                                styleName={selectedStyleDisplayName}
+                                                font={selectedStyleEffectiveFont}
+                                                paragraph={selectedStyleEffectiveParagraph}
+                                                styleType={selectedStyleTypeForPreview}
+                                                category={selectedStyleCategoryForPreview}
+                                                tableFormat={selectedStyleTableFormat}
+                                            />
                                         )}
                                     </div>
                                     <div className={`preview-status-line ${isPreviewLoading ? 'busy' : ''}`} aria-live="polite">
                                         {isPreviewLoading
-                                            ? 'Renderizando vista real en Word...'
-                                            : (previewImage ? 'Renderizado real de Word' : 'Vista CSS aproximada')}
+                                            ? 'Renderizando con Word nativo en cola serializada...'
+                                            : (previewImage ? 'Preview Word nativo listo' : 'Preview interno automatico; Word solo se ejecuta por boton.')}
                                     </div>
                                 </>
                             ) : (

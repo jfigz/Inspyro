@@ -17,7 +17,6 @@ node_modules/
 frontend/node_modules/
 frontend/build/
 desktop/.stage/
-desktop/dist/
 build/
 dist/
 
@@ -44,37 +43,18 @@ coverage.xml
 *.log
 .agent_logs/
 
-# Local/runtime caches
-.codex/
-.inspyro/
-.playwright-mcp/
-.template_tokens/
+# Templates cache
 backend/.templates/
 backend/.template_tokens/
-frontend/playwright-report/
-frontend/test-results/
-_agent_runs/
-mcp-iter-smoke/
-mcp-ui-mirror-smoke/
+backend/HOLA_DESDE_MCP.txt
 
 # Generated document/test artifacts
 Docx_Documents/
-output/
 output/playwright/
+output/template-editor-bank/
+output/template-binding-bank/
 backend/tmp/
 backend/backend/tmp/
-*.zip
-
-# Local screenshots and release prep captures
-cloudflare-*.png
-hostinger-*.png
-openpyro-v3*.png
-webpage-v3*.png
-inspyro-webpage-v3-current.png
-file-tabs-integrated*.png
-dependency-capacity*.png
-desktop-dependency*.png
-mobile-*.png
 
 # Sandbox
 sandbox/

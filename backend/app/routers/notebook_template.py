@@ -31,12 +31,15 @@ from app.routers.notebook_common import (
     _track_template_handler,
     _parse_table_index,
     _kernel_docx_set_template_code,
+    _template_native_word_preview_lock,
     _template_style_preview_semaphore,
     _template_table_preview_semaphore,
     _bind_kernel_to_connection,
+    TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S,
     TEMPLATE_PREVIEW_TIMEOUT_S,
 )
 from app.services import template_logic
+from app.services import template_binding
 
 TEMPLATE_UPLOAD_MAX_BYTES = int(os.getenv("INSPYRO_TEMPLATE_UPLOAD_MAX_BYTES", str(20 * 1024 * 1024)))
 
@@ -59,6 +62,18 @@ async def _reload_template_in_kernel(kernel_id: str, template_payload: Optional[
         pass
 
 
+async def _refresh_bound_template_binding(kernel_id: str, template_payload: Optional[dict]) -> Optional[dict]:
+    try:
+        return await template_binding.refresh_bound_template_export(kernel_id, template=template_payload)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "binding": template_binding.get_kernel_template_binding_status(kernel_id),
+            "message": str(exc),
+            "error_code": "template_binding_refresh_failed",
+        }
+
+
 async def _bind_template_kernel_connection(websocket: WebSocket, kernel_id: Optional[str]) -> None:
     if not kernel_id:
         return
@@ -77,12 +92,14 @@ async def handle_template_upload(message: dict, websocket: WebSocket):
             await _bind_template_kernel_connection(websocket, kernel_id)
 
             extracted = await template_logic.process_template_upload(kernel_id, message.get("docx_base64"))
+            template_binding_status = await _refresh_bound_template_binding(kernel_id, extracted)
 
             await manager.send_personal_message({
                 "type": "template_uploaded",
                 "kernel_id": kernel_id,
                 "request_id": request_id,
                 "template": extracted,
+                "template_binding": template_binding_status,
             }, websocket)
 
         except template_logic.TemplateValidationError as e:
@@ -105,6 +122,7 @@ async def handle_template_attach(message: dict, websocket: WebSocket):
             await _bind_template_kernel_connection(websocket, kernel_id)
 
             extracted, used_token = await template_logic.process_template_attach(kernel_id, template_token)
+            template_binding_status = await _refresh_bound_template_binding(kernel_id, extracted)
 
             await manager.send_personal_message({
                 "type": "template_uploaded",
@@ -112,6 +130,7 @@ async def handle_template_attach(message: dict, websocket: WebSocket):
                 "request_id": request_id,
                 "template_token": used_token,
                 "template": extracted,
+                "template_binding": template_binding_status,
             }, websocket)
 
         except template_logic.TemplateValidationError as e:
@@ -137,12 +156,14 @@ async def handle_template_get(message: dict, websocket: WebSocket):
         await _bind_template_kernel_connection(websocket, kernel_id)
         
         template = template_storage.get_template(kernel_id)
+        template_binding_status = template_binding.get_kernel_template_binding_status(kernel_id)
         
         await manager.send_personal_message({
             "type": "template_info",
             "kernel_id": kernel_id,
             "request_id": request_id,
-            "template": template
+            "template": template,
+            "template_binding": template_binding_status,
         }, websocket)
         
     except Exception as e:
@@ -185,6 +206,7 @@ async def handle_template_delete(message: dict, websocket: WebSocket):
 
             notebook_docx_hash.pop(kernel_id, None)
             notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = template_binding.get_kernel_template_binding_status(kernel_id)
 
         await manager.send_personal_message(
             {
@@ -192,6 +214,7 @@ async def handle_template_delete(message: dict, websocket: WebSocket):
                 "kernel_id": kernel_id,
                 "request_id": request_id,
                 "was_deleted": deleted,
+                "template_binding": template_binding_status,
             },
             websocket,
         )
@@ -257,6 +280,7 @@ async def handle_template_update_style(message: dict, websocket: WebSocket):
 
             notebook_docx_hash.pop(kernel_id, None)
             notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = await _refresh_bound_template_binding(kernel_id, updated_template)
 
         await manager.send_personal_message(
             {
@@ -265,6 +289,7 @@ async def handle_template_update_style(message: dict, websocket: WebSocket):
                 "request_id": request_id,
                 "style_name": style_name,
                 "template": updated_template,
+                "template_binding": template_binding_status,
             },
             websocket,
         )
@@ -317,6 +342,7 @@ async def handle_template_update_document_defaults(message: dict, websocket: Web
 
             notebook_docx_hash.pop(kernel_id, None)
             notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = await _refresh_bound_template_binding(kernel_id, updated_template)
 
         await manager.send_personal_message(
             {
@@ -324,6 +350,7 @@ async def handle_template_update_document_defaults(message: dict, websocket: Web
                 "kernel_id": kernel_id,
                 "request_id": request_id,
                 "template": updated_template,
+                "template_binding": template_binding_status,
             },
             websocket,
         )
@@ -384,6 +411,7 @@ async def handle_template_update_semantic_slots(message: dict, websocket: WebSoc
 
             notebook_docx_hash.pop(kernel_id, None)
             notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = await _refresh_bound_template_binding(kernel_id, updated_template)
 
         await manager.send_personal_message(
             {
@@ -391,6 +419,7 @@ async def handle_template_update_semantic_slots(message: dict, websocket: WebSoc
                 "kernel_id": kernel_id,
                 "request_id": request_id,
                 "template": updated_template,
+                "template_binding": template_binding_status,
             },
             websocket,
         )
@@ -435,6 +464,14 @@ async def handle_template_preview_style(message: dict, websocket: WebSocket):
             style_props["style_type"] = "table"
         if message.get("category") and not style_props.get("category"):
             style_props["category"] = message.get("category")
+        preview_engine = str(message.get("preview_engine") or "").strip().lower()
+        native_word_preview = (
+            message.get("native_word_preview") is True
+            or preview_engine in {"word_native", "native_word", "word"}
+        )
+        if native_word_preview:
+            style_props["_preview_engine"] = "word_native"
+            style_props["native_word_preview"] = True
         style_id = style_props.get("style_id") if isinstance(style_props, dict) else None
         force_refresh_raw = message.get("force_refresh", False)
         force_refresh = (
@@ -480,15 +517,38 @@ async def handle_template_preview_style(message: dict, websocket: WebSocket):
             async with _template_style_preview_semaphore:
                 if not await _is_preview_request_current(preview_track_key, request_id):
                     return
-                preview_b64 = await asyncio.wait_for(
-                    template_service.run_template_executor(
-                        template_preview.generate_style_preview,
-                        kernel_id,
-                        style_name,
-                        style_props,
-                    ),
-                    timeout=TEMPLATE_PREVIEW_TIMEOUT_S,
-                )
+                try:
+                    await asyncio.wait_for(
+                        _template_native_word_preview_lock.acquire(),
+                        timeout=TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    if preview_track_key and not await _is_preview_request_current(preview_track_key, request_id):
+                        return
+                    await manager.send_personal_message({
+                        "type": "template_preview_error",
+                        "kernel_id": kernel_id,
+                        "style_name": style_name,
+                        "style_id": style_id,
+                        "error": f"Preview Word nativo en cola por mas de {TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S}s",
+                        "preview_key": preview_key,
+                        "request_id": request_id
+                    }, websocket)
+                    return
+                try:
+                    if not await _is_preview_request_current(preview_track_key, request_id):
+                        return
+                    preview_b64 = await asyncio.wait_for(
+                        template_service.run_template_executor(
+                            template_preview.generate_style_preview,
+                            kernel_id,
+                            style_name,
+                            style_props,
+                        ),
+                        timeout=TEMPLATE_PREVIEW_TIMEOUT_S,
+                    )
+                finally:
+                    _template_native_word_preview_lock.release()
         except asyncio.TimeoutError:
             if preview_track_key and not await _is_preview_request_current(preview_track_key, request_id):
                 return
@@ -641,15 +701,36 @@ async def handle_template_table_preview(message: dict, websocket: WebSocket):
             if not await _is_preview_request_current(preview_track_key, request_id):
                 return
             try:
-                result = await asyncio.wait_for(
-                    template_service.run_template_executor(
-                        template_preview.generate_document_table_preview,
-                        kernel_id,
-                        table_index,
-                        4,  # max_rows for preview
-                    ),
-                    timeout=TEMPLATE_PREVIEW_TIMEOUT_S,
-                )
+                try:
+                    await asyncio.wait_for(
+                        _template_native_word_preview_lock.acquire(),
+                        timeout=TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    if preview_track_key and not await _is_preview_request_current(preview_track_key, request_id):
+                        return
+                    await manager.send_personal_message({
+                        "type": "template_table_preview_error",
+                        "kernel_id": kernel_id,
+                        "table_index": table_index,
+                        "error": f"Preview de tabla en cola por mas de {TEMPLATE_NATIVE_WORD_PREVIEW_QUEUE_TIMEOUT_S}s",
+                        "request_id": request_id
+                    }, websocket)
+                    return
+                try:
+                    if not await _is_preview_request_current(preview_track_key, request_id):
+                        return
+                    result = await asyncio.wait_for(
+                        template_service.run_template_executor(
+                            template_preview.generate_document_table_preview,
+                            kernel_id,
+                            table_index,
+                            4,  # max_rows for preview
+                        ),
+                        timeout=TEMPLATE_PREVIEW_TIMEOUT_S,
+                    )
+                finally:
+                    _template_native_word_preview_lock.release()
             except asyncio.TimeoutError:
                 if preview_track_key and not await _is_preview_request_current(preview_track_key, request_id):
                     return
@@ -760,6 +841,11 @@ async def handle_template_create_style_from_table(message: dict, websocket: WebS
             if updated_template:
                 notebook_docx_hash.pop(kernel_id, None)
                 notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = (
+            await _refresh_bound_template_binding(kernel_id, updated_template)
+            if updated_template
+            else template_binding.get_kernel_template_binding_status(kernel_id)
+        )
 
         if updated_template:
             
@@ -770,6 +856,7 @@ async def handle_template_create_style_from_table(message: dict, websocket: WebS
                     "request_id": request_id,
                     "style_name": style_name,
                     "template": updated_template,
+                    "template_binding": template_binding_status,
                 },
                 websocket,
             )
@@ -859,6 +946,11 @@ async def handle_template_apply_table_format(message: dict, websocket: WebSocket
             if updated_template:
                 notebook_docx_hash.pop(kernel_id, None)
                 notebook_last_docx_b64.pop(kernel_id, None)
+        template_binding_status = (
+            await _refresh_bound_template_binding(kernel_id, updated_template)
+            if updated_template
+            else template_binding.get_kernel_template_binding_status(kernel_id)
+        )
         
         if updated_template:
             style_label = target_style_name or target_style_id or "estilo objetivo"
@@ -872,6 +964,7 @@ async def handle_template_apply_table_format(message: dict, websocket: WebSocket
                     "target_style_name": target_style_name,
                     "target_style_id": target_style_id,
                     "template": updated_template,
+                    "template_binding": template_binding_status,
                     "message": f"Formato de tabla #{table_index + 1} aplicado al estilo '{style_label}'",
                 },
                 websocket,

@@ -1,9 +1,17 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { API_BASE } from '../config/endpoints';
 import FileExplorer from './FileExplorer';
 
 const apiUrl = (path) => `${API_BASE}${path}`;
+
+const createDeferred = () => {
+  let resolve;
+  const promise = new Promise((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+};
 
 const buildTreeResponse = (workspacePath) => ({
   name: 'workspace',
@@ -229,6 +237,308 @@ describe('FileExplorer', () => {
       );
     });
     expect(await screen.findByText('main.py')).not.toBeNull();
+    const srcTreeCalls = fetchMock.mock.calls.filter(
+      ([url]) => url === apiUrl('/api/files/tree?path=C%3A%5Cworkspace%5Csrc&depth=1&show_hidden=0')
+    ).length;
+    expect(srcTreeCalls).toBe(1);
+  });
+
+  it('ignores stale tree responses after switching workspaces', async () => {
+    const workspaceA = 'C:\\workspace-a';
+    const workspaceB = 'C:\\workspace-b';
+    const oldTree = createDeferred();
+    const workspaceAUrl = apiUrl('/api/files/tree?path=C%3A%5Cworkspace-a&depth=1&show_hidden=0');
+    const workspaceBUrl = apiUrl('/api/files/tree?path=C%3A%5Cworkspace-b&depth=1&show_hidden=0');
+    const fetchMock = jest.fn().mockImplementation((url) => {
+      if (url === apiUrl('/api/system/info')) {
+        return Promise.resolve({ ok: true, json: async () => ({ active_workspace: workspaceA }) });
+      }
+      if (url === workspaceAUrl) return oldTree.promise;
+      if (url === workspaceBUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => buildTreeResponseWithChildren(workspaceB, [
+            {
+              name: 'new.py',
+              path: `${workspaceB}\\new.py`,
+              isDirectory: false,
+              writable: true,
+              hidden: false,
+              symlink: false,
+              modified: 1,
+              relativePath: 'new.py',
+              hasChildren: false,
+              size: 10,
+              extension: '.py',
+            },
+          ]),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    global.fetch = fetchMock;
+
+    const { rerender } = render(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspaceA}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(workspaceAUrl);
+    });
+
+    rerender(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspaceB}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    expect(await screen.findByText('new.py')).not.toBeNull();
+
+    await act(async () => {
+      oldTree.resolve({
+        ok: true,
+        json: async () => buildTreeResponseWithChildren(workspaceA, [
+          {
+            name: 'old.py',
+            path: `${workspaceA}\\old.py`,
+            isDirectory: false,
+            writable: true,
+            hidden: false,
+            symlink: false,
+            modified: 1,
+            relativePath: 'old.py',
+            hasChildren: false,
+            size: 10,
+            extension: '.py',
+          },
+        ]),
+      });
+      await oldTree.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('old.py')).toBeNull();
+    expect(screen.getByText('new.py')).not.toBeNull();
+  });
+
+  it('does not refresh expanded folders from the previous workspace after switching workspaces', async () => {
+    const workspaceA = 'C:\\workspace-a';
+    const workspaceB = 'C:\\workspace-b';
+    const srcPath = `${workspaceA}\\src`;
+    const workspaceAUrl = apiUrl('/api/files/tree?path=C%3A%5Cworkspace-a&depth=1&show_hidden=0');
+    const workspaceBUrl = apiUrl('/api/files/tree?path=C%3A%5Cworkspace-b&depth=1&show_hidden=0');
+    const srcUrl = apiUrl('/api/files/tree?path=C%3A%5Cworkspace-a%5Csrc&depth=1&show_hidden=0');
+    const fetchMock = jest.fn().mockImplementation((url) => {
+      if (url === apiUrl('/api/system/info')) {
+        return Promise.resolve({ ok: true, json: async () => ({ active_workspace: workspaceA }) });
+      }
+      if (url === workspaceAUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => buildTreeResponseWithChildren(workspaceA, [
+            {
+              name: 'src',
+              path: srcPath,
+              isDirectory: true,
+              writable: true,
+              hidden: false,
+              symlink: false,
+              modified: 1,
+              relativePath: 'src',
+              hasChildren: true,
+              children: [],
+            },
+          ]),
+        });
+      }
+      if (url === srcUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            name: 'src',
+            path: srcPath,
+            isDirectory: true,
+            writable: true,
+            hidden: false,
+            symlink: false,
+            modified: 1,
+            relativePath: 'src',
+            hasChildren: false,
+            children: [],
+          }),
+        });
+      }
+      if (url === workspaceBUrl) {
+        return Promise.resolve({ ok: true, json: async () => buildTreeResponse(workspaceB) });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    global.fetch = fetchMock;
+
+    const { rerender } = render(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspaceA}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    await screen.findByText('src');
+    fireEvent.click(screen.getByText('src'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(srcUrl);
+    });
+    const workspaceACallsBeforeSwitch = fetchMock.mock.calls.filter(([url]) => url === workspaceAUrl).length;
+    const srcCallsBeforeSwitch = fetchMock.mock.calls.filter(([url]) => url === srcUrl).length;
+
+    rerender(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspaceB}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(workspaceBUrl);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === workspaceAUrl)).toHaveLength(workspaceACallsBeforeSwitch);
+    expect(fetchMock.mock.calls.filter(([url]) => url === srcUrl)).toHaveLength(srcCallsBeforeSwitch);
+  });
+
+  it('refreshes a loaded folder when workspace events use equivalent parent path casing and separators', async () => {
+    const workspacePath = 'C:\\Workspace';
+    const srcPath = `${workspacePath}\\src`;
+    const rootUrl = apiUrl('/api/files/tree?path=C%3A%5CWorkspace&depth=1&show_hidden=0');
+    const srcUrl = apiUrl('/api/files/tree?path=C%3A%5CWorkspace%5Csrc&depth=1&show_hidden=0');
+    let srcCalls = 0;
+    const fetchMock = jest.fn().mockImplementation((url) => {
+      if (url === apiUrl('/api/system/info')) {
+        return Promise.resolve({ ok: true, json: async () => ({ active_workspace: workspacePath }) });
+      }
+      if (url === rootUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => buildTreeResponseWithChildren(workspacePath, [
+            {
+              name: 'src',
+              path: srcPath,
+              isDirectory: true,
+              writable: true,
+              hidden: false,
+              symlink: false,
+              modified: 1,
+              relativePath: 'src',
+              hasChildren: true,
+              children: [],
+            },
+          ]),
+        });
+      }
+      if (url === srcUrl) {
+        srcCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            name: 'src',
+            path: srcPath,
+            isDirectory: true,
+            writable: true,
+            hidden: false,
+            symlink: false,
+            modified: 1,
+            relativePath: 'src',
+            hasChildren: true,
+            children: srcCalls > 1
+              ? [
+                {
+                  name: 'new.py',
+                  path: `${srcPath}\\new.py`,
+                  isDirectory: false,
+                  writable: true,
+                  hidden: false,
+                  symlink: false,
+                  modified: 1,
+                  relativePath: 'src/new.py',
+                  hasChildren: false,
+                  size: 10,
+                  extension: '.py',
+                },
+              ]
+              : [],
+          }),
+        });
+      }
+      return Promise.reject(new Error(`Unexpected fetch URL: ${url}`));
+    });
+
+    global.fetch = fetchMock;
+
+    const { rerender } = render(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspacePath}
+        lastWorkspaceEvent={null}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    await screen.findByText('src');
+    fireEvent.click(screen.getByText('src'));
+    await waitFor(() => {
+      expect(srcCalls).toBe(1);
+    });
+
+    rerender(
+      <FileExplorer
+        onFileOpen={jest.fn()}
+        onWorkspaceChange={jest.fn()}
+        currentWorkspace={workspacePath}
+        lastWorkspaceEvent={{
+          id: 'evt-created',
+          workspace_path: 'c:/workspace',
+          events: [
+            {
+              action: 'created',
+              path: 'c:/workspace/src/new.py',
+              parentPath: 'c:/workspace/src',
+              isDirectory: false,
+            },
+          ],
+        }}
+        isCollapsed={false}
+        onToggleCollapse={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(srcCalls).toBe(2);
+    });
+    expect(await screen.findByText('new.py')).not.toBeNull();
   });
 
   it('runs quick open search and opens a selected result', async () => {

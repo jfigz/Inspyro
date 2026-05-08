@@ -1,12 +1,45 @@
 ﻿# Changelog 04 - notebook-handlers
 
-> **Última actualización:** 2026-04-28
+> **Última actualización:** 2026-05-08
+
+---
+
+## 2026-05-08 - Binding JSON de plantilla por notebook
+
+1. `notebook_create`, `notebook_load` y `notebook_reset_kernel` resuelven `metadata.inspyro.template_binding` y aplican el JSON portable antes de dejar listo el kernel.
+2. El binding usa rutas relativas seguras al directorio del notebook, rechaza traversal y reporta `status="missing"` o `status="error"` sin bloquear ejecución cuando el JSON no existe o está corrupto.
+3. Se agrega `backend/app/services/template_binding.py` como servicio compartido para exportar, validar, aplicar y refrescar paquetes `schema_version=1.1` con `semantic_style_slots`.
+4. Los ACKs notebook/template incluyen `template_binding` de forma aditiva para que UI y MCP reflejen el estado persistido del notebook.
+
+**Archivos:** `backend/app/services/template_binding.py`, `backend/app/routers/notebook_execution.py`, `backend/app/routers/notebook_kernel_control.py`, `backend/app/routers/notebook_template.py`, `backend/tests/test_template_binding.py`, `docs/modules/04-notebook-handlers.md`, `docs/changelog/04-notebook-handlers.md`, `docs/architecture/contracts-catalog.md`, `docs/architecture/feature-threads.md`, `docs/architecture/system-context.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-06 - Celdas DOCX lógicas con persistencia Jupyter estándar
+
+1. Se introduce una capa común de normalización `logical_cell_kind <-> persisted cell_type`: `docx` queda como tipo lógico de runtime/UI/MCP y se guarda como `cell_type="code"` + `metadata.inspyro.cell_kind="docx"`.
+2. `notebook_save` y la escritura REST de `.ipynb` canonicalizan el notebook, completan campos requeridos por nbformat y validan con `nbformat.validate` antes de persistir.
+3. La lectura de notebooks legacy con `cell_type="docx"` o fuentes DOCX detectables sigue exponiendo `docx` al runtime, pero una nueva escritura migra el archivo a forma estándar.
+4. La detección legacy queda conservadora y token/AST-aware: `build_doc`, `doc_begin`, `doc_reset`, `doc_finalize` y APIs DOCX reales promocionan celdas; `pd.DataFrame(...)` y métodos genéricos no.
+5. `doc_finalize()` se exporta por `docx_builder`/`math_to_docx` y el preámbulo notebook lo inyecta junto con el resto de helpers DOCX, incluyendo `builtins`.
+
+**Archivos:** `backend/app/services/notebook_cell_kinds.py`, `backend/app/services/notebook_service.py`, `backend/app/routers/notebook_execution.py`, `backend/app/routers/files.py`, `backend/librerias_propias/docx_builder/__init__.py`, `backend/librerias_propias/math_to_docx.py`, `backend/tests/test_notebook_load_ids.py`, `backend/tests/test_docx_empty_handling.py`, `backend/tests/test_mcp_server_remediation.py`, `docs/modules/04-notebook-handlers.md`, `docs/changelog/04-notebook-handlers.md`, `docs/architecture/contracts-catalog.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-04 - Attach de template reinyecta slots semánticos al kernel
+
+1. `_apply_template_bytes_to_kernel()` pasa `semantic_style_slots` a `_kernel_docx_set_template_code()` junto con los defaults de tabla y estilos requeridos.
+2. El kernel queda alineado con la plantilla que ve la UI/editor, incluso cuando los estilos Word vienen localizados con IDs como `Textoindependiente`, `Ttulo1`, `Descripcin` o `Tablaconcuadrcula`.
+3. Se valida el flujo con generación real de DOCX/PDF desde notebook, inspeccionando `document.xml` y `styles.xml` para confirmar contenido y estilos aplicados.
+
+**Archivos:** `backend/app/routers/notebook_common.py`, `backend/tests/test_template_style_fallback.py`, `docs/modules/04-notebook-handlers.md`, `docs/changelog/04-notebook-handlers.md`, `docs/llm-index.yaml`
 
 ---
 
 ## 2026-04-28 - Persistencia y ejecución de celdas DOCX nativas
 
-1. `notebook_save`, carga/normalización y escritura de `.ipynb` preservan `cell_type="docx"` como tipo custom Inspyro, serializando JSON directo cuando hay tipos no-Jupyter para evitar que `nbformat` los convierta a `code`.
+1. Históricamente `notebook_save`, carga/normalización y escritura de `.ipynb` preservaban `cell_type="docx"` como tipo custom Inspyro; esto queda superado por la migración nbformat-safe del 2026-05-06.
 2. `notebook_execute_cell` acepta `cell_type` en el payload WS y trata `docx` como celda Python ejecutable, conservando `emit_docx` como modo documental de la corrida.
 3. La normalización migra suavemente celdas legacy `code` con APIs DOCX detectables hacia `docx`, sin romper notebooks existentes ni fuentes MCP que aún no declaran metadata.
 

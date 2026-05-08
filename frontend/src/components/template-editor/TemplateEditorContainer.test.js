@@ -248,6 +248,25 @@ const buildTemplateInfo = () => ({
   },
 });
 
+const cloneTemplateInfo = (templateInfo) => JSON.parse(JSON.stringify(templateInfo));
+
+const setBodyTextFont = (templateInfo, fontName) => {
+  const bodyText = templateInfo.style_browser.categories.body.find((entry) => entry.style?.style_id === 'BodyText');
+  if (bodyText) {
+    bodyText.style.font = {
+      ...(bodyText.style.font || {}),
+      font_name: fontName,
+      name: fontName,
+    };
+    bodyText.style.resolved_font = {
+      ...(bodyText.style.resolved_font || {}),
+      font_name: fontName,
+      name: fontName,
+    };
+  }
+  return templateInfo;
+};
+
 const buildTemplateInfoWithTableSlot = () => {
   const template = buildTemplateInfo();
   const tableEntry = {
@@ -275,14 +294,43 @@ const buildTemplateInfoWithTableSlot = () => {
       table_variants: {},
     },
   };
+  const sourceTableEntry = {
+    name: 'Grid Table 1 Light',
+    display_name: 'Grid Table 1 Light',
+    status: 'defined',
+    description: 'Tabla de muestra',
+    category: 'tables',
+    style_type: 'table',
+    selection_key: 'tables|LightGrid|Grid Table 1 Light',
+    style: {
+      name: 'Grid Table 1 Light',
+      display_name: 'Grid Table 1 Light',
+      style_id: 'LightGrid',
+      type: 'table',
+      resolved_font: {
+        font_name: 'Century Gothic',
+        name: 'Century Gothic',
+        font_size_pt: 9,
+        size_pt: 9,
+      },
+      resolved_paragraph_format: {},
+      resolved_table_format: {},
+      resolved_cell_format: {},
+      table_variants: {},
+    },
+  };
 
   template.document_tables = [
     {
       index: 0,
       rows: 2,
-      columns: 2,
-      style_id: 'TableGrid',
-      style_name: 'Table Grid',
+      cols: 2,
+      style_id: 'LightGrid',
+      style_name: 'Grid Table 1 Light',
+      style_display_name: 'Grid Table 1 Light',
+      uses_table_style: true,
+      has_direct_table_format: false,
+      direct_format_keys: [],
       preview_label: 'Tabla 1',
     },
   ];
@@ -294,11 +342,11 @@ const buildTemplateInfoWithTableSlot = () => {
     },
     counts: {
       ...template.style_browser.counts,
-      tables: 1,
+      tables: 2,
     },
     categories: {
       ...template.style_browser.categories,
-      tables: [tableEntry],
+      tables: [tableEntry, sourceTableEntry],
     },
   };
   template.semantic_style_slots = {
@@ -493,6 +541,27 @@ describe('TemplateEditorContainer effective font rendering', () => {
     expect(screen.getAllByRole('heading', { name: 'Body Text' }).length).toBeGreaterThan(0);
   });
 
+  it('does not overwrite a dirty slot font edit during equivalent template rerenders', async () => {
+    const templateInfo = buildTemplateInfo();
+    const { props, rerender } = renderEditor({
+      templateInfo,
+    });
+
+    fireEvent.change(screen.getByDisplayValue('Century Gothic'), {
+      target: { value: 'Arial' },
+    });
+
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={cloneTemplateInfo(templateInfo)}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByDisplayValue('Arial')).toBeTruthy());
+    expect(screen.getByText(/Guardar Cambios/i).closest('button').disabled).toBe(false);
+  });
+
   it('starts in Slots and keeps secondary actions inside the More menu', () => {
     renderEditor({
       templateInfo: buildTemplateInfo(),
@@ -507,9 +576,36 @@ describe('TemplateEditorContainer effective font rendering', () => {
     fireEvent.click(screen.getByTestId('template-more-actions'));
 
     expect(document.body.querySelector('.dropdown-panel.template-actions-menu')).toBeTruthy();
+    expect(screen.getByTestId('template-bind-button')).toBeTruthy();
     expect(screen.getByTestId('template-import-json')).toBeTruthy();
     expect(screen.getByTestId('template-export-json')).toBeTruthy();
     expect(screen.getByTestId('template-delete-button')).toBeTruthy();
+  });
+
+  it('binds the active template to the notebook from the secondary action menu', async () => {
+    const onTemplateBind = jest.fn().mockResolvedValue({});
+    renderEditor({
+      templateInfo: buildTemplateInfo(),
+      onTemplateBind,
+    });
+
+    fireEvent.click(screen.getByTestId('template-more-actions'));
+    fireEvent.click(screen.getByTestId('template-bind-button'));
+
+    await waitFor(() => expect(onTemplateBind).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows an explicit warning when the linked template JSON is missing', () => {
+    renderEditor({
+      templateInfo: buildTemplateInfo(),
+      templateBinding: {
+        status: 'missing',
+        message: 'Template JSON vinculado no existe',
+      },
+    });
+
+    expect(screen.getByTestId('template-binding-status').textContent).toContain('Perdida');
+    expect(screen.getByTestId('template-binding-warning').textContent).toContain('Template JSON vinculado no existe');
   });
 
   it('selects a semantic slot card and updates the central style context', () => {
@@ -523,6 +619,35 @@ describe('TemplateEditorContainer effective font rendering', () => {
     expect(within(screen.getByTestId('template-slot-context')).getByText('Slot: Caption')).toBeTruthy();
     expect(within(screen.getByTestId('template-slot-context')).getByText('Caption')).toBeTruthy();
     expect(screen.getAllByRole('heading', { name: 'Caption' }).length).toBeGreaterThan(0);
+  });
+
+  it('uses the internal preview by default without auto-rendering Word', () => {
+    const { props } = renderEditor({
+      templateInfo: buildTemplateInfo(),
+    });
+
+    expect(screen.getByTestId('template-internal-preview')).toBeTruthy();
+    expect(screen.getByTestId('template-native-word-preview')).toBeTruthy();
+    expect(props.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_preview_style',
+    }));
+    expect(screen.getByText(/Preview interno automatico/i)).toBeTruthy();
+  });
+
+  it('requests native Word preview only from the explicit rail button', async () => {
+    const { props } = renderEditor({
+      templateInfo: buildTemplateInfo(),
+    });
+
+    props.sendMessage.mockClear();
+    fireEvent.click(screen.getByTestId('template-native-word-preview'));
+
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_preview_style',
+      kernel_id: 'kernel-template',
+      preview_engine: 'word_native',
+      native_word_preview: true,
+    })));
   });
 
   it('does not reset preview state repeatedly when stable template metadata rerenders', () => {
@@ -601,6 +726,53 @@ describe('TemplateEditorContainer effective font rendering', () => {
     expect(screen.getAllByRole('heading', { name: 'Normal' }).length).toBeGreaterThan(0);
   });
 
+  it('rehydrates semantic slots from template_semantic_slots_updated ACK payloads', async () => {
+    const baseTemplate = buildTemplateInfo();
+    const updatedTemplate = cloneTemplateInfo(baseTemplate);
+    updatedTemplate.semantic_style_slots.body = {
+      ...updatedTemplate.semantic_style_slots.body,
+      selection_key: 'body|Normal|Normal',
+      style_id: 'Normal',
+      style_name: 'Normal',
+      display_name: 'Normal',
+      style_type: 'paragraph',
+    };
+    const { props, rerender } = renderEditor({
+      templateInfo: baseTemplate,
+    });
+
+    expect(screen.getByTestId('template-slot-select-body').value).toBe('body|BodyText|Body Text');
+
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={baseTemplate}
+        lastMessage={{
+          type: 'template_semantic_slots_updated',
+          request_id: 'slot-update-1',
+          template: updatedTemplate,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(props.onTemplateChange).toHaveBeenCalledWith(updatedTemplate));
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={updatedTemplate}
+        lastMessage={{
+          type: 'template_semantic_slots_updated',
+          request_id: 'slot-update-1',
+          template: updatedTemplate,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('template-slot-select-body').value).toBe('body|Normal|Normal'));
+    expect(within(screen.getByTestId('template-slot-context')).getByText('Normal')).toBeTruthy();
+    expect(screen.getAllByRole('heading', { name: 'Normal' }).length).toBeGreaterThan(0);
+  });
+
   it('allows switching the active style inside a detected category', () => {
     renderEditor({
       templateInfo: buildTemplateInfo(),
@@ -629,6 +801,70 @@ describe('TemplateEditorContainer effective font rendering', () => {
     fireEvent.click(screen.getByTestId('template-sidebar-styles'));
 
     expect(screen.getByTestId('template-tab-direct')).toBeTruthy();
+  });
+
+  it('applies direct table formatting with the selected table style and stable table index', async () => {
+    const { props } = renderEditor({
+      templateInfo: buildTemplateInfoWithTableSlot(),
+    });
+
+    fireEvent.click(screen.getByTestId('template-slot-card-table_default'));
+    fireEvent.click(screen.getByTestId('template-sidebar-styles'));
+    fireEvent.click(screen.getByTestId('template-tab-direct'));
+
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_table_preview',
+      table_index: 0,
+    })));
+    props.sendMessage.mockClear();
+
+    fireEvent.click(screen.getByText('Tabla 1'));
+    expect(screen.getByText('Tabla 1').closest('.direct-table-card').className).toContain('selected');
+
+    fireEvent.click(screen.getByTestId('template-apply-table-format'));
+
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_apply_table_format',
+      kernel_id: 'kernel-template',
+      table_index: 0,
+      target_style_name: 'Table Grid',
+      target_style_id: 'TableGrid',
+    })));
+    expect(screen.getByText('Tabla 1').closest('.direct-table-card').className).toContain('selected');
+  });
+
+  it('offers source table styles as the table_default slot instead of requiring direct formatting', async () => {
+    const { props } = renderEditor({
+      templateInfo: buildTemplateInfoWithTableSlot(),
+    });
+
+    fireEvent.click(screen.getByTestId('template-slot-card-table_default'));
+    fireEvent.click(screen.getByTestId('template-sidebar-styles'));
+    fireEvent.click(screen.getByTestId('template-tab-direct'));
+
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_table_preview',
+      table_index: 0,
+    })));
+    props.sendMessage.mockClear();
+
+    expect(screen.getByText('Estilo Word: Grid Table 1 Light')).toBeTruthy();
+    expect(screen.getAllByText('Estilo Word').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId('template-use-source-table-style'));
+
+    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_update_semantic_slots',
+      kernel_id: 'kernel-template',
+      semantic_style_slots: expect.objectContaining({
+        table_default: expect.objectContaining({
+          style_id: 'LightGrid',
+          style_name: 'Grid Table 1 Light',
+          display_name: 'Grid Table 1 Light',
+          style_type: 'table',
+        }),
+      }),
+    })));
   });
 
   it('uses style_id in template_update_style for duplicate-safe updates', async () => {
@@ -667,7 +903,140 @@ describe('TemplateEditorContainer effective font rendering', () => {
     }));
   });
 
-  it('imports a portable template JSON v1.1 and attaches the uploaded token', async () => {
+  it('filters hidden Word styles by default and reveals them on demand', () => {
+    const templateInfo = buildTemplateInfo();
+    templateInfo.style_browser.categories.other = [
+      {
+        name: 'Hidden Internal',
+        display_name: 'Hidden Internal',
+        status: 'defined',
+        category: 'other',
+        style_type: 'paragraph',
+        selection_key: 'other|HiddenInternal|Hidden Internal',
+        style: {
+          name: 'Hidden Internal',
+          display_name: 'Hidden Internal',
+          style_id: 'HiddenInternal',
+          type: 'paragraph',
+          hidden: true,
+          style_visibility: { hidden: true },
+        },
+      },
+      {
+        name: 'Visible Custom',
+        display_name: 'Visible Custom',
+        status: 'defined',
+        category: 'other',
+        style_type: 'paragraph',
+        selection_key: 'other|VisibleCustom|Visible Custom',
+        style: {
+          name: 'Visible Custom',
+          display_name: 'Visible Custom',
+          style_id: 'VisibleCustom',
+          type: 'paragraph',
+        },
+      },
+    ];
+    templateInfo.style_browser.counts.other = 2;
+
+    renderEditor({ templateInfo });
+
+    fireEvent.click(screen.getByTestId('template-sidebar-styles'));
+    expect(screen.queryByText('Hidden Internal')).toBeNull();
+    expect(screen.getAllByText('Visible Custom').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByTestId('template-show-hidden-styles'));
+    expect(screen.getAllByText('Hidden Internal').length).toBeGreaterThan(0);
+  });
+
+  it('rehydrates the selected style from template_style_updated ACK payloads', async () => {
+    const baseTemplate = buildTemplateInfo();
+    const updatedTemplate = setBodyTextFont(cloneTemplateInfo(baseTemplate), 'Arial');
+    const { props, rerender } = renderEditor({
+      templateInfo: baseTemplate,
+    });
+
+    expect(screen.getByDisplayValue('Century Gothic')).toBeTruthy();
+
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={baseTemplate}
+        lastMessage={{
+          type: 'template_style_updated',
+          request_id: 'style-update-1',
+          style_name: 'Body Text',
+          template: updatedTemplate,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(props.onTemplateChange).toHaveBeenCalledWith(updatedTemplate));
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={updatedTemplate}
+        lastMessage={{
+          type: 'template_style_updated',
+          request_id: 'style-update-1',
+          style_name: 'Body Text',
+          template: updatedTemplate,
+        }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByDisplayValue('Arial')).toBeTruthy());
+  });
+
+  it('rehydrates document defaults from template_document_defaults_updated ACK payloads', async () => {
+    const baseTemplate = buildTemplateInfo();
+    const updatedTemplate = cloneTemplateInfo(baseTemplate);
+    updatedTemplate.document_defaults.font.font_name = 'Aptos';
+    updatedTemplate.document_defaults.font.name = 'Aptos';
+    const { props, rerender } = renderEditor({
+      templateInfo: baseTemplate,
+    });
+
+    fireEvent.click(screen.getByTestId('template-sidebar-styles'));
+    fireEvent.click(screen.getByText('Documento (Global)'));
+    expect(screen.getByDisplayValue('Calibri')).toBeTruthy();
+
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        templateInfo={updatedTemplate}
+        lastMessage={{
+          type: 'template_document_defaults_updated',
+          request_id: 'doc-defaults-1',
+          template: updatedTemplate,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(props.onTemplateChange).toHaveBeenCalledWith(updatedTemplate));
+    await waitFor(() => expect(screen.getByDisplayValue('Aptos')).toBeTruthy());
+  });
+
+  it('hydrates templateInfo from template_uploaded ACK payloads inside the editor', async () => {
+    const uploadedTemplate = buildTemplateInfo();
+    const { props, rerender } = renderEditor();
+
+    expect(screen.getByText('No hay plantilla activa.')).toBeTruthy();
+
+    rerender(
+      <TemplateEditorContainer
+        {...props}
+        lastMessage={{
+          type: 'template_uploaded',
+          request_id: 'upload-1',
+          template: uploadedTemplate,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(props.onTemplateChange).toHaveBeenCalledWith(uploadedTemplate));
+  });
+
+  it('imports a portable template JSON v1.1 and hands the uploaded token to App attach', async () => {
     global.fetch.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -698,10 +1067,18 @@ describe('TemplateEditorContainer effective font rendering', () => {
     fireEvent.change(jsonInput, { target: { files: [portableJson] } });
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'template_attach',
-      template_token: 'template-import-token',
+    await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
+      templateToken: 'template-import-token',
+      requestId: expect.stringMatching(/^tpl_upload_/),
+      attachSent: true,
     })));
+    expect(props.sendMessage).toHaveBeenCalledTimes(1);
+    expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_attach',
+      kernel_id: 'kernel-template',
+      template_token: 'template-import-token',
+      request_id: expect.stringMatching(/^tpl_upload_/),
+    }));
   });
 
   it('accepts legacy portable template JSON v1.0 with category_overrides', async () => {
@@ -731,10 +1108,18 @@ describe('TemplateEditorContainer effective font rendering', () => {
     fireEvent.change(jsonInput, { target: { files: [portableJson] } });
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'template_attach',
-      template_token: 'template-import-token',
+    await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
+      templateToken: 'template-import-token',
+      requestId: expect.stringMatching(/^tpl_upload_/),
+      attachSent: true,
     })));
+    expect(props.sendMessage).toHaveBeenCalledTimes(1);
+    expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_attach',
+      kernel_id: 'kernel-template',
+      template_token: 'template-import-token',
+      request_id: expect.stringMatching(/^tpl_upload_/),
+    }));
   });
 
   it('rejects invalid portable JSON imports', async () => {

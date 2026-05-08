@@ -1,6 +1,16 @@
 ﻿# Changelog 09 - jupyter-kernel
 
-> **Última actualización:** 2026-04-19
+> **Última actualización:** 2026-05-06
+
+---
+
+## 2026-05-06 - Readiness explícito antes de ejecutar celdas
+
+1. `start_kernel()` deja de registrar kernels si el ping inicial no llega a `idle`; en ese caso cierra canales/kernel, recrea una vez y luego falla con `KERNEL_NOT_READY` si el segundo intento tampoco queda listo.
+2. `execute_cell()` corre un health check corto bajo el lock del kernel, drena mensajes stale y reinicia una sola vez si la sesión no responde antes de ejecutar código de usuario.
+3. Los timeouts de shell se etiquetan como `SHELL_REPLY_TIMEOUT` y el manager expone `get_kernel_diagnostics()` con `ready` y último diagnóstico para routers/MCP.
+
+**Archivos:** `backend/app/services/jupyter_kernel.py`, `backend/tests/test_jupyter_kernel_resilience.py`, `docs/modules/09-jupyter-kernel.md`, `docs/changelog/09-jupyter-kernel.md`, `docs/llm-index.yaml`
 
 ---
 

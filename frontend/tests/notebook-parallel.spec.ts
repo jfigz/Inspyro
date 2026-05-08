@@ -190,8 +190,7 @@ test.describe.serial('Notebook Parallel Runtime', () => {
 
       await page.getByTestId('desktop-titlebar-go-home').click();
       await expect(page.getByRole('region', { name: /Inicio del espacio de trabajo de agentes/i })).toBeVisible({ timeout: 15000 });
-      await page.getByRole('button', { name: /Notebooks/i }).first().click();
-      await expect(page.getByText(/convertidor PDF compartido/i).first()).toBeVisible({ timeout: 30000 });
+      await expect(page.getByTestId('agent-home-lane-run')).toContainText(/convertidor PDF compartido/i, { timeout: 30000 });
     }
 
     for (const [notebookName, readyText] of [

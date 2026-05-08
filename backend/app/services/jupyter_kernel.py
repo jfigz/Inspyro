@@ -172,6 +172,8 @@ class KernelSession:
     manager: AsyncKernelManager
     client: AsyncKernelClient
     execute_lock: asyncio.Lock
+    ready: bool = False
+    last_kernel_diagnostics: Dict[str, Any] = None  # type: ignore
     last_variables: Dict[str, Any] = None  # type: ignore
     last_extras: Dict[str, Any] = None  # type: ignore
     # Caché inteligente: {var_name: (object_id, serialized_value)}
@@ -200,33 +202,57 @@ class JupyterKernelManager:
             )
 
         async with self._lock:
-            km = AsyncKernelManager(kernel_name=kernel_name)
-            # start_kernel accepts cwd to set working directory
-            kwargs = {}
-            if cwd:
-                kwargs['cwd'] = cwd
-            await km.start_kernel(**kwargs)
+            last_error: BaseException | None = None
+            for attempt in range(2):
+                km = AsyncKernelManager(kernel_name=kernel_name)
+                kc = None
+                try:
+                    # start_kernel accepts cwd to set working directory
+                    kwargs = {}
+                    if cwd:
+                        kwargs['cwd'] = cwd
+                    await km.start_kernel(**kwargs)
 
-            kc = self._create_client(km)
-            # En jupyter_client 8.x, start_channels es síncrono
+                    kc = self._create_client(km)
+                    # En jupyter_client 8.x, start_channels es síncrono
 
-            # Verificar canal iopub operativo
-            # Enviar un ping simple: solicitar ejecución vacía
-            msg_id = kc.execute("", store_history=False, allow_stdin=False, silent=True)
-            await self._wait_for_idle(kc, parent_msg_id=msg_id, timeout=10.0)
+                    # Verificar canal iopub operativo
+                    # Enviar un ping simple: solicitar ejecución vacía
+                    msg_id = kc.execute("", store_history=False, allow_stdin=False, silent=True)
+                    if not await self._wait_for_idle(kc, parent_msg_id=msg_id, timeout=10.0):
+                        raise RuntimeError("KERNEL_NOT_READY: startup idle ping timed out")
 
-            kernel_id = km.kernel_id  # type: ignore[attr-defined]
-            if not kernel_id:
-                # Fallback: usar id del objeto
-                kernel_id = str(id(km))
+                    kernel_id = km.kernel_id  # type: ignore[attr-defined]
+                    if not kernel_id:
+                        # Fallback: usar id del objeto
+                        kernel_id = str(id(km))
 
-            self._sessions[kernel_id] = KernelSession(
-                kernel_id=kernel_id,
-                manager=km,
-                client=kc,
-                execute_lock=asyncio.Lock(),
-            )
-            return kernel_id
+                    self._sessions[kernel_id] = KernelSession(
+                        kernel_id=kernel_id,
+                        manager=km,
+                        client=kc,
+                        execute_lock=asyncio.Lock(),
+                        ready=True,
+                        last_kernel_diagnostics={"startup_ready": True, "startup_attempt": attempt + 1},
+                    )
+                    return kernel_id
+                except Exception as exc:
+                    last_error = exc
+                    if kc is not None:
+                        try:
+                            kc.stop_channels()
+                        except Exception:
+                            pass
+                    try:
+                        await km.shutdown_kernel(now=True)
+                    except Exception:
+                        pass
+                    if attempt == 0:
+                        logger.warning("Kernel startup readiness failed; recreating once: %s", exc)
+                        continue
+                    raise RuntimeError(f"KERNEL_NOT_READY: startup failed after retry ({last_error})")
+
+            raise RuntimeError(f"KERNEL_NOT_READY: startup failed ({last_error})")
 
     async def restart_kernel(self, kernel_id: str) -> None:
         session = self._get_session(kernel_id)
@@ -242,9 +268,15 @@ class JupyterKernelManager:
         # Esperar a que el kernel esté listo (ping)
         try:
             msg_id = new_client.execute("", store_history=False, allow_stdin=False, silent=True)
-            await self._wait_for_idle(new_client, parent_msg_id=msg_id, timeout=10.0)
+            if not await self._wait_for_idle(new_client, parent_msg_id=msg_id, timeout=10.0):
+                session.ready = False
+                session.last_kernel_diagnostics = {"restart_ready": False, "error_code": "KERNEL_NOT_READY"}
+                raise RuntimeError("KERNEL_NOT_READY: restart idle ping timed out")
+            session.ready = True
+            session.last_kernel_diagnostics = {"restart_ready": True}
         except Exception as e:
             logger.debug(f"Error esperando kernel listo tras restart: {e}")
+            raise
 
     async def shutdown_kernel(self, kernel_id: str) -> None:
         session = self._get_session(kernel_id)
@@ -278,6 +310,79 @@ class JupyterKernelManager:
         if not session:
             raise ValueError(f"Kernel {kernel_id} no encontrado")
         return session
+
+    async def _drain_stale_channel_messages(self, kc: AsyncKernelClient, *, limit: int = 100) -> int:
+        drained = 0
+        for channel_name in ("shell_channel", "iopub_channel"):
+            channel = getattr(kc, channel_name, None)
+            if channel is None:
+                continue
+            for _ in range(limit):
+                try:
+                    await channel.get_msg(timeout=0.001)
+                    drained += 1
+                except Exception as exc:
+                    if _is_benign_iopub_empty(exc) or isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                        break
+                    logger.debug("Stopping stale %s drain after channel error: %s", channel_name, exc)
+                    break
+        return drained
+
+    async def _ensure_session_ready_locked(self, session: KernelSession, *, timeout: float = 5.0) -> None:
+        """Run a short ping before user execution and recover once if needed."""
+        last_error: BaseException | None = None
+        for attempt in range(2):
+            try:
+                drained = await self._drain_stale_channel_messages(session.client)
+                msg_id = session.client.execute("", store_history=False, allow_stdin=False, silent=True)
+                reply_task = asyncio.create_task(
+                    self._wait_for_execute_reply(session.client, msg_id, timeout=timeout)
+                )
+                idle_task = asyncio.create_task(
+                    self._wait_for_idle(session.client, parent_msg_id=msg_id, timeout=timeout)
+                )
+                try:
+                    await reply_task
+                    idle_ok = await idle_task
+                finally:
+                    for task in (reply_task, idle_task):
+                        if not task.done():
+                            task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await task
+                if not idle_ok:
+                    raise RuntimeError("KERNEL_NOT_READY: health check idle ping timed out")
+                session.ready = True
+                session.last_kernel_diagnostics = {
+                    "startup_ready": True,
+                    "health_check_ready": True,
+                    "health_check_attempt": attempt + 1,
+                    "drained_stale_messages": drained,
+                }
+                return
+            except Exception as exc:
+                last_error = exc
+                session.ready = False
+                session.last_kernel_diagnostics = {
+                    "startup_ready": False,
+                    "health_check_ready": False,
+                    "health_check_attempt": attempt + 1,
+                    "error_code": "KERNEL_NOT_READY",
+                    "error": _describe_exception(exc),
+                }
+                if attempt == 0:
+                    logger.warning("Kernel %s not ready; restarting before retry: %s", session.kernel_id, exc)
+                    await self.restart_kernel(session.kernel_id)
+                    continue
+                raise RuntimeError(f"KERNEL_NOT_READY: health check failed after retry ({last_error})")
+
+    def get_kernel_diagnostics(self, kernel_id: str) -> Dict[str, Any]:
+        session = self._get_session(kernel_id)
+        return {
+            "kernel_id": kernel_id,
+            "ready": bool(session.ready),
+            "diagnostics": dict(session.last_kernel_diagnostics or {}),
+        }
 
     def get_last_variables(self, kernel_id: str) -> Dict[str, Any]:
         """Obtiene las últimas variables capturadas para un kernel (fire-and-forget)."""
@@ -321,6 +426,7 @@ class JupyterKernelManager:
     ) -> Tuple[List[Dict[str, Any]], int, Dict[str, Any], Dict[str, Any]]:
         session = self._get_session(kernel_id)
         async with session.execute_lock:
+            await self._ensure_session_ready_locked(session)
             return await self._execute_cell_locked(
                 session=session,
                 code=code,
@@ -657,28 +763,32 @@ class JupyterKernelManager:
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                raise TimeoutError("Timeout esperando execute_reply")
+                raise TimeoutError("SHELL_REPLY_TIMEOUT: Timeout esperando execute_reply")
             try:
                 msg = await kc.shell_channel.get_msg(timeout=min(1.0, remaining))
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or _is_benign_iopub_empty(exc):
+                    continue
+                logger.debug("Unexpected shell channel read error while waiting %s: %s", parent_msg_id, exc)
                 continue
             if msg.get("parent_header", {}).get("msg_id") == parent_msg_id and msg.get("msg_type") == "execute_reply":
                 return msg
 
-    async def _wait_for_idle(self, kc: AsyncKernelClient, parent_msg_id: str, timeout: float = KERNEL_IDLE_TIMEOUT) -> None:
+    async def _wait_for_idle(self, kc: AsyncKernelClient, parent_msg_id: str, timeout: float = KERNEL_IDLE_TIMEOUT) -> bool:
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 logger.warning("_wait_for_idle timed out after %.1fs for msg %s", timeout, parent_msg_id)
-                return
+                return False
             try:
                 msg = await kc.iopub_channel.get_msg(timeout=min(1.0, remaining))
             except Exception:
                 continue
-            if msg.get("parent_header", {}).get("msg_id") == parent_msg_id:
-                if msg.get("msg_type") == "status" and msg.get("content", {}).get("execution_state") == "idle":
-                    return
+            parent_header = msg.get("parent_header") if isinstance(msg.get("parent_header"), dict) else {}
+            parent_matches = parent_header.get("msg_id") == parent_msg_id or not parent_header.get("msg_id")
+            if parent_matches and msg.get("msg_type") == "status" and msg.get("content", {}).get("execution_state") == "idle":
+                return True
 
     async def _capture_variables_summary(self, kc: AsyncKernelClient, timeout: float = KERNEL_IDLE_TIMEOUT) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Captura variables y extras (performance/estados) vía user_expressions en execute_reply."""

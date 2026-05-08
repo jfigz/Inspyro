@@ -1,6 +1,119 @@
 ﻿# Changelog 17 - template-editor
 
-> **Última actualización:** 2026-05-01
+> **Última actualización:** 2026-05-08
+
+---
+
+## 2026-05-08 - Banco `template-binding-bank` para binding JSON por notebook
+
+1. `backend/tests/test_template_binding.py` se amplía como subset rápido de PR: contratos de bind, paquetes corruptos/schema inválidos/base64 inválido, rutas inseguras, symlink traversal, workspace default, Home canónico frente a legacy y autoexport aislado por kernel.
+2. Se agrega `frontend/tests/template-binding-bank.spec.ts`, banco live Playwright que valida upload+bind, persistencia `.ipynb`/JSON, estado `Vinculada`, warning por JSON perdido, no dirty falso por hidratación, Home summary y MCP stateful.
+3. `agent_debug.ps1` suma `template-binding-bank`, que ejecuta subset backend/frontend y luego el banco live; además `verify-fast` incluye `test_template_binding.py` para que el contrato notebook-first quede en el gate rápido.
+4. El banco live genera evidencia en `output/template-binding-bank/<run-id>/summary.json` y `summary.md`, con matriz requisito→escenario→resultado→artefactos.
+
+**Archivos:** `backend/tests/test_template_binding.py`, `frontend/tests/template-binding-bank.spec.ts`, `frontend/src/hooks/useTemplateMessageHandler.test.js`, `agent_debug.ps1`, `.gitignore`, `docs/modules/17-template-editor.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-08 - Plantilla JSON anidada al notebook
+
+1. `POST /api/templates/bind` exporta el template activo en formato portable, escribe `<notebook_stem>.inspyro-template.json` junto al notebook y parchea `metadata.inspyro.template_binding`.
+2. Las mutaciones autoritativas del editor (`template_uploaded`, estilos, defaults, slots, creación y formato de tabla) refrescan automáticamente el JSON vinculado cuando el kernel tiene binding activo.
+3. El formato persistido conserva `schema_version=1.1`, `template`, `docx_base64` y `semantic_style_slots` top-level; el DOCX mirror legacy queda solo como compatibilidad/migración.
+4. La UI del editor agrega la acción `Anidar plantilla` y estados explícitos de vínculo para distinguir plantilla activa runtime de plantilla persistida por notebook.
+
+**Archivos:** `backend/app/services/template_binding.py`, `backend/app/routers/templates.py`, `backend/app/routers/notebook_template.py`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/TemplateEditor.css`, `backend/tests/test_template_binding.py`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`, `docs/architecture/contracts-catalog.md`, `docs/architecture/feature-threads.md`, `docs/architecture/system-context.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-08 - Banco exhaustivo de pruebas del Template Editor
+
+1. Se agrega `backend/tests/template_editor_bank_utils.py` para generar fixtures DOCX sintéticas y auditarlas desde OOXML: mínima, completa, localizada, Word-complete y corrupta, con estilos ocultos/latentes, tablas, headers/footers, SDTs/placeholders, `docDefaults` y propiedades avanzadas de Word.
+2. Se agrega `backend/tests/test_template_editor_bank.py` para validar extracción, mutación, `word_style`, `word_defaults`, `style_visibility`, slots semánticos, tablas directas vs `tblStyle`, cuarentena/regeneración de DOCX corrupto y coherencia JSON↔DOCX.
+3. Se agrega `frontend/tests/template-editor-bank.spec.ts` como E2E exhaustivo: upload+attach sin doble `template_attach`, navegación `Slots/Estilos/Diagnóstico`, edición rápida y `Word completo`, export/import JSON portable, cierre/reapertura, generación DOCX desde notebook, inspección OOXML y Workbench `audit`/`render_all_pages`.
+4. El banco escribe reportes `summary.json` y `summary.md` en `output/template-editor-bank/<run-id>/` y se ignora ese directorio como artefacto generado.
+5. La cobertura encontró y fijó una regresión real en mutaciones OOXML: helpers de `template_service.py` ya no usan truthiness de `ElementTree` para reutilizar nodos vacíos, por lo que propiedades como `w:kern` y `w:spacing` se sobrescriben correctamente.
+
+**Archivos:** `backend/tests/template_editor_bank_utils.py`, `backend/tests/test_template_editor_bank.py`, `frontend/tests/template-editor-bank.spec.ts`, `.gitignore`, `backend/app/services/template_service.py`, `frontend/src/App.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `docs/modules/17-template-editor.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-08 - Carga determinística y edición Word completa práctica
+
+1. El WebSocket global de plantillas agrega cola acotada de mensajes críticos, flush ordenado tras reconnect, deduplicación por `request_id`/attach key y retorno booleano de `sendMessage()` para que `template_attach` no se pierda cuando el socket aún está cerrando o reabriendo.
+2. `App.js` centraliza el attach por token: upload/import REST solo producen `template_token`, el latch `lastTemplateAttach` queda `pending` hasta ACK `template_uploaded`/`template_info`, y los errores limpian el estado pendiente sin disparar doble attach.
+3. `useTemplateMessageHandler` rehidrata payloads autoritativos también desde `template_style_created` y `template_format_applied`, evitando `template_get` redundante y drift después de mutaciones de tabla/estilo.
+4. `_sanitize_persisted_template_if_needed()` ya no devuelve JSON stale tras cuarentenar un DOCX corrupto: regenera el DOCX, reextrae metadata compatible, preserva slots válidos y persiste DOCX/JSON coherentes.
+5. `_write_docx_parts()` adopta escritura ZIP temporal con validación y `os.replace()` con retry, alineada con el hardening de `save_template`.
+6. `template_update_style` y `template_update_document_defaults` aceptan campos aditivos `word_style`, `word_defaults` y `style_visibility`; la extracción publica estilos ocultos/latentes con metadata OOXML y la UI los filtra por defecto con toggle `Mostrar ocultos`.
+7. `StyleEditPanel` incorpora modo `Word completo` con secciones estructuradas de identidad, galería, fuente, párrafo, listas, tablas y OOXML/raw, manteniendo el modo rápido existente.
+
+**Archivos:** `frontend/src/hooks/useWebSocket.js`, `frontend/src/hooks/useTemplateMessageHandler.js`, `frontend/src/App.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/StyleEditPanel.js`, `frontend/src/components/TemplateEditor.css`, `backend/app/services/template_service.py`, `backend/tests/test_template_storage_hardening.py`, `frontend/src/hooks/useWebSocket.test.js`, `frontend/src/hooks/useTemplateMessageHandler.test.js`, `frontend/src/components/template-editor/StyleEditPanel.test.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `docs/modules/17-template-editor.md`, `docs/architecture/contracts-catalog.md`, `docs/architecture/system-context.md`, `docs/llm-index.yaml`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-06 - Tablas estilo-derivadas sin borrado de bordes
+
+1. `template_apply_table_format` deja de borrar propiedades del estilo destino cuando la tabla fuente no trae formato directo equivalente.
+2. Si la tabla fuente referencia un `tblStyle`, backend resuelve ese estilo Word y copia su formato efectivo antes de aplicar overrides directos de la tabla.
+3. `TableDirectFormatPanel` muestra cuándo una tabla proviene de un estilo Word y permite asignar ese estilo al slot `table_default` sin usar la ruta de formato directo.
+4. Se agregan regresiones backend para preservar bordes destino y copiar bordes desde el estilo fuente, más cobertura frontend para asignar `table_default` desde la tabla de muestra.
+
+**Archivos:** `backend/app/services/template_service.py`, `backend/tests/test_template_table_hardening.py`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/TableDirectFormatPanel.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/TemplateEditor.css`, `docs/modules/17-template-editor.md`, `docs/modules/01-document-generation-docx.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-06 - Persistencia atomica y quarantine de templates DOCX
+
+1. `_write_template_files()` usa locks por `kernel_id`, temporales únicos, `fsync` y `os.replace()` con retry/backoff para escribir `template.docx` y `template.json`.
+2. `_sanitize_persisted_template_if_needed()` detecta DOCX corruptos/no-ZIP, los mueve a `template.quarantine_*.docx` y regenera un DOCX limpio mínimo si `python-docx` está disponible.
+3. Se agregan regresiones para escritura completa sin temporales colgando y quarantine/regeneración de templates corruptos.
+
+**Archivos:** `backend/app/services/template_service.py`, `backend/tests/test_template_storage_hardening.py`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-05 - Fuentes legacy con fallback Word visible
+
+1. `StyleEditPanel` preserva borradores sucios de fuente, párrafo y tabla frente a props equivalentes reconstruidas, evitando que un cambio manual como `Arial` vuelva a `CG Times (W1)` antes de guardar.
+2. `TemplateEditorContainer` sincroniza la selección de `Slots` por identidad estable (`selection_key`, `style_id`, `category`, `style_type`, `status`) en vez de comparar referencias del objeto `style`.
+3. `fontUtils` conserva el nombre exacto del template para fuentes no instaladas y muestra el fallback Word detectado desde `font_table.fonts[].alt_name` cuando está disponible en `system_font_catalog`.
+4. La cobertura backend prueba un DOCX con `Body Text`/`Textoindependiente` en `CG Times (W1)` y `altName="Times New Roman"`, y verifica que guardar `Arial` escribe `w:rFonts` en `ascii`, `hAnsi`, `cs` y `eastAsia` sin atributos theme conflictivos.
+5. El reattach persistido desde Home y las mutaciones del editor usan el WebSocket global de plantillas para evitar que el socket dedicado del notebook deje un `template_attach` stale pisando un `template_update_style` reciente.
+
+**Archivos:** `frontend/src/App.js`, `frontend/src/components/VisualizationPanel.js`, `frontend/src/components/DocxViewer.js`, `frontend/src/components/template-editor/StyleEditPanel.js`, `frontend/src/components/template-editor/StyleEditPanel.test.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/template-editor/fontUtils.js`, `frontend/src/components/template-editor/fontUtils.test.js`, `frontend/src/components/TemplateEditor.css`, `backend/tests/test_template_style_fallback.py`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-05 - Preview interno automatico y Word nativo serializado
+
+1. `TemplateEditorContainer` muestra un preview interno automatico en el rail al cargar o cambiar una plantilla, sin disparar Word ni dejar el estado pegado en generacion.
+2. `StyleEditPanel` y `useStylePreviewPipeline` envian `preview_engine="word_native"` y `native_word_preview=true` solo cuando el usuario presiona `Preview Word nativo`.
+3. `notebook_template.py` serializa previews Word nativos de estilos y tablas con un lock compartido y timeout de cola; `generate_style_preview()` usa Word nativo solo para esa ruta explicita y cae al preview interno si no hay imagen.
+4. Se agregan regresiones frontend/backend y el E2E del editor verifica que la carga DOCX usa `template-internal-preview` y el boton `template-native-word-preview` sin render Word automatico.
+
+**Archivos:** `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/StyleEditPanel.js`, `frontend/src/components/template-editor/hooks/useStylePreviewPipeline.js`, `frontend/src/components/TemplateEditor.css`, `backend/app/routers/notebook_common.py`, `backend/app/routers/notebook_template.py`, `backend/app/services/template_service.py`, `backend/tests/test_template_table_hardening.py`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/template-editor/previewHooks.test.js`, `frontend/tests/template-editor.spec.ts`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`, `docs/architecture/system-context.md`
+
+---
+
+## 2026-05-05 - Runtime defaults de tablas en preview
+
+1. `_apply_table_runtime_defaults_to_preview_table()` cambia de `xml.etree.ElementTree` a OOXML nativo de `python-docx` para tablas de preview, eliminando el warning `CT_TblPr`.
+2. Los previews de estilos de tabla vuelven a aplicar `tblLook`, `tblLayout` y `tblW` desde `table_style_runtime_defaults` sin introducir nodos inválidos en `styles.xml`.
+3. Se agregan regresiones backend con `Document().add_table()` y frontend para ACK de slots semánticos, retry de preview de tablas y estabilidad al aplicar formato directo.
+
+**Archivos:** `backend/app/services/template_service.py`, `backend/tests/test_template_table_hardening.py`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-04 - Rehidratación de estilos y slots custom
+
+1. `TemplateEditorContainer` consume los payloads `template_*_updated` como fuente autoritativa, refresca `templateInfo`, selección por `style_id`/slot y dirty state después del ACK real.
+2. `StyleEditPanel` guarda cambios de fuente escritos manualmente o elegidos desde el picker sin bloquear por fuentes no instaladas en el host.
+3. `App.js` separa notebook origen y mirror `.docx` al abrir plantillas desde Home, evitando que `Abrir plantilla` intente leer un DOCX como archivo binario editable.
+4. `template_service.py` preserva `semantic_style_slots` al reextraer tras cambios de estilo o `docDefaults`, manteniendo IDs Word localizados como `Textoindependiente` y `Ttulo1`.
+
+**Archivos:** `frontend/src/App.js`, `frontend/src/App.test.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/template-editor/StyleEditPanel.js`, `frontend/src/components/template-editor/StyleEditPanel.test.js`, `backend/app/services/template_service.py`, `backend/tests/test_template_style_fallback.py`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
 
 ---
 

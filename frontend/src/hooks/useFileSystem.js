@@ -31,6 +31,12 @@ const isSameOrDescendantPath = (candidate, target) => {
     return normalizedCandidate === normalizedTarget || normalizedCandidate.startsWith(`${normalizedTarget}/`);
 };
 
+const pathSetHas = (source, path) => {
+    const normalizedPath = normalizePath(path);
+    if (!normalizedPath) return false;
+    return Array.from(source || []).some((candidate) => normalizePath(candidate) === normalizedPath);
+};
+
 const replacePathPrefix = (value, oldBase, newBase) => {
     if (!isSameOrDescendantPath(value, oldBase)) return value;
 
@@ -85,7 +91,10 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
     const programmaticSyncPathRef = useRef(null);
     const openFilesRef = useRef([]);
     const activeFileRef = useRef(null);
+    const modifiedFilesRef = useRef(modifiedFiles);
     const pendingOpenPromisesRef = useRef(new Map());
+
+    modifiedFilesRef.current = modifiedFiles;
 
     const setCode = useCallback((next, options = {}) => {
         const path = options.path || activeFileRef.current?.path || null;
@@ -170,6 +179,7 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
         setModifiedFiles((prev) => {
             const next = new Set(prev);
             next.delete(path);
+            modifiedFilesRef.current = next;
             return next;
         });
     }, []);
@@ -178,6 +188,7 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
         setModifiedFiles((prev) => {
             const next = new Set(prev);
             next.add(path);
+            modifiedFilesRef.current = next;
             return next;
         });
     }, []);
@@ -431,9 +442,13 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
     }, [activateCachedFile]);
 
     const remapPathState = useCallback((oldPath, newPath) => {
-        setModifiedFiles((prev) => mapPathSet(prev, (value) => (
-            isSameOrDescendantPath(value, oldPath) ? replacePathPrefix(value, oldPath, newPath) : value
-        )));
+        setModifiedFiles((prev) => {
+            const next = mapPathSet(prev, (value) => (
+                isSameOrDescendantPath(value, oldPath) ? replacePathPrefix(value, oldPath, newPath) : value
+            ));
+            modifiedFilesRef.current = next;
+            return next;
+        });
         setExternalStaleFiles((prev) => mapPathSet(prev, (value) => (
             isSameOrDescendantPath(value, oldPath) ? replacePathPrefix(value, oldPath, newPath) : value
         )));
@@ -565,7 +580,11 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
             fileSavedRevisionRef.current.delete(file.path);
         });
 
-        setModifiedFiles((prev) => mapPathSet(prev, (value) => (isSameOrDescendantPath(value, path) ? null : value)));
+        setModifiedFiles((prev) => {
+            const next = mapPathSet(prev, (value) => (isSameOrDescendantPath(value, path) ? null : value));
+            modifiedFilesRef.current = next;
+            return next;
+        });
         setExternalStaleFiles((prev) => mapPathSet(prev, (value) => (isSameOrDescendantPath(value, path) ? null : value)));
         setExternalConflictFiles((prev) => mapPathSet(prev, (value) => (isSameOrDescendantPath(value, path) ? null : value)));
         return true;
@@ -635,7 +654,7 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
             if (action === 'modified' && targetPath) {
                 const affectedFiles = currentOpenFiles.filter((candidate) => normalizePath(candidate?.path) === normalizePath(targetPath));
                 for (const file of affectedFiles) {
-                    if (modifiedFiles.has(file.path)) {
+                    if (pathSetHas(modifiedFilesRef.current, file.path)) {
                         markExternalConflict(file.path);
                         conflictedPaths.add(file.path);
                         continue;
@@ -648,13 +667,13 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
 
             if (action === 'moved' && targetPath && oldPath) {
                 const affectedFiles = currentOpenFiles.filter((candidate) => isSameOrDescendantPath(candidate?.path, oldPath));
-                const dirtyTargets = affectedFiles.filter((candidate) => modifiedFiles.has(candidate.path));
+                const dirtyTargets = affectedFiles.filter((candidate) => pathSetHas(modifiedFilesRef.current, candidate.path));
                 dirtyTargets.forEach((candidate) => {
                     markExternalConflict(candidate.path);
                     conflictedPaths.add(candidate.path);
                 });
 
-                if (affectedFiles.some((candidate) => !modifiedFiles.has(candidate.path))) {
+                if (affectedFiles.some((candidate) => !pathSetHas(modifiedFilesRef.current, candidate.path))) {
                     renameOpenFile(oldPath, targetPath);
                     renamedPaths.push([oldPath, targetPath]);
                 }
@@ -663,13 +682,13 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
 
             if (action === 'deleted' && targetPath) {
                 const affectedFiles = currentOpenFiles.filter((candidate) => isSameOrDescendantPath(candidate?.path, targetPath));
-                const dirtyTargets = affectedFiles.filter((candidate) => modifiedFiles.has(candidate.path));
+                const dirtyTargets = affectedFiles.filter((candidate) => pathSetHas(modifiedFilesRef.current, candidate.path));
                 dirtyTargets.forEach((candidate) => {
                     markExternalConflict(candidate.path);
                     conflictedPaths.add(candidate.path);
                 });
 
-                if (affectedFiles.some((candidate) => !modifiedFiles.has(candidate.path))) {
+                if (affectedFiles.some((candidate) => !pathSetHas(modifiedFilesRef.current, candidate.path))) {
                     removeOpenFile(targetPath);
                     removedPaths.push(targetPath);
                 }
@@ -690,7 +709,6 @@ export default function useFileSystem(API_BASE, DEFAULT_CODE, notebookActionsRef
     }, [
         backgroundReloadFileByPath,
         markExternalConflict,
-        modifiedFiles,
         removeOpenFile,
         renameOpenFile,
     ]);

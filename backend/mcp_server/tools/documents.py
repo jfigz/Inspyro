@@ -643,6 +643,24 @@ async def _resolve_docx_quality_target(
                 "source_path": normalized_source_path,
                 "artifact": history_item,
             }
+        try:
+            source_candidate = Path(normalized_source_path).expanduser()
+            if source_candidate.suffix.lower() == ".docx" and source_candidate.exists():
+                return {
+                    "artifact_id": None,
+                    "kernel_id": normalized_kernel_id,
+                    "execution_id": normalized_execution_id,
+                    "source_path": normalized_source_path,
+                    "artifact": None,
+                    "error_code": "invalid_quality_selector",
+                    "message": (
+                        "`source_path` identifica el origen con historial DOCX de Inspyro "
+                        "(notebook o script), no una copia DOCX exportada. Usa artifact_id, "
+                        "kernel_id, execution_id o la respuesta de prepare_document_delivery."
+                    ),
+                }
+        except OSError:
+            pass
 
     return {
         "artifact_id": None,
@@ -654,6 +672,15 @@ async def _resolve_docx_quality_target(
 
 
 def _quality_request_body(target: dict[str, Any]) -> dict[str, Any]:
+    if target.get("error_code") == "invalid_quality_selector":
+        raise BridgeError(
+            str(target.get("message") or "Selector DOCX invalido para calidad."),
+            payload={
+                "type": "mcp_document_error",
+                "error_code": "invalid_quality_selector",
+                "source_path": target.get("source_path"),
+            },
+        )
     if target.get("artifact_id"):
         return {"artifact_id": target["artifact_id"]}
     if target.get("source_path"):
@@ -974,8 +1001,9 @@ async def check_document_quality(
     """Cuando usar: revisar errores de calidad DOCX desde MCP sin traer binarios.
 
     Prerrequisitos: un `artifact_id`, un `kernel_id` con DOCX registrado o un
-    `source_path` con historial DOCX. Con `run=False` solo lee el summary cacheado;
-    con `run=True` ejecuta la auditoria backend bajo demanda usando `profile`.
+    `source_path` del origen con historial DOCX de Inspyro (notebook/script, no una
+    copia `.docx` exportada). Con `run=False` solo lee el summary cacheado; con
+    `run=True` ejecuta la auditoria backend bajo demanda usando `profile`.
     Resultado: devuelve `quality_status`, `score`, `counts`, `sections` y findings
     normalizados segun `detail`, sin DOCX, PNG, XML raw ni base64.
     Siguiente tool tipica: `get_document_docx(include_quality=True)` o
@@ -991,6 +1019,15 @@ async def check_document_quality(
         execution_id=execution_id,
         source_path=source_path,
     )
+    if target.get("error_code") == "invalid_quality_selector":
+        return {
+            "status": "invalid_quality_selector",
+            "artifact_id": None,
+            "kernel_id": target.get("kernel_id"),
+            "execution_id": target.get("execution_id"),
+            "source_path": target.get("source_path"),
+            "message": target.get("message"),
+        }
 
     if run:
         try:
@@ -1226,9 +1263,9 @@ async def export_clean_document_docx(
 ) -> dict[str, Any]:
     """Cuando usar: generar una copia DOCX limpia y publicable desde un artefacto existente.
 
-    Prerrequisitos: un `artifact_id`, `kernel_id` con DOCX o `source_path` con historial;
-    `path` debe quedar dentro de los roots MCP visibles. La copia limpia es opt-in y
-    nunca reemplaza el artefacto original.
+    Prerrequisitos: un `artifact_id`, `kernel_id` con DOCX o `source_path` del origen
+    con historial DOCX de Inspyro (notebook/script); `path` debe quedar dentro de los
+    roots MCP visibles. La copia limpia es opt-in y nunca reemplaza el artefacto original.
     Resultado: escribe un `.docx` limpio y devuelve `path`, `size_bytes`, `hash` y
     metadata de origen, sin inlinear el documento.
     Siguiente tool tipica: abrir la ruta exportada o volver a `check_document_quality(run=True)`.
@@ -1315,7 +1352,8 @@ async def run_document_workbench(
     """Cuando usar: ejecutar una operacion DOCX Workbench y recibir solo resumen compacto.
 
     Prerrequisitos: `operation` debe ser una operacion Workbench soportada y debe existir
-    un DOCX resoluble por `artifact_id`, `kernel_id` o `source_path`.
+    un DOCX resoluble por `artifact_id`, `kernel_id` o `source_path` del origen con
+    historial DOCX de Inspyro, no por una copia `.docx` exportada.
     Resultado: devuelve summary/handles limitados; nunca inlinea DOCX, PNG, XML raw ni base64.
     Siguiente tool tipica: `check_document_quality`, `compare_document_versions` o
     `prepare_document_delivery`.
@@ -1428,8 +1466,9 @@ async def prepare_document_delivery(
 ) -> dict[str, Any]:
     """Cuando usar: preparar una variante DOCX publicable al final del flujo agente.
 
-    Genera una variante limpia opt-in; si `path` se entrega, escribe esa variante dentro de
-    roots MCP permitidos. No reemplaza el artefacto original.
+    Genera una variante limpia opt-in desde `artifact_id`, `kernel_id` o `source_path`
+    del origen con historial DOCX de Inspyro; si `path` se entrega, escribe esa variante
+    dentro de roots MCP permitidos. No reemplaza el artefacto original.
     """
     result = await _run_document_workbench_bridge(
         operation="prepare_delivery",

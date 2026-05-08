@@ -55,12 +55,19 @@ from app.services.pdf_converter import (
 )
 from app.services.docx_artifacts import get_latest_docx_artifact
 from app.services.home_compact import home_compact_store
+from app.services import template_binding
 from app.services.notebook_service import (
     DocumentJobRequest,
     get_kernel_docx_source,
     _build_notebook_progress_update_payload,
     get_kernel_notebook_snapshot,
     set_kernel_notebook_snapshot,
+)
+from app.services.notebook_cell_kinds import (
+    canonicalize_notebook_for_persistence,
+    logical_cell_kind,
+    mark_logical_cell_kind,
+    validate_persisted_notebook,
 )
 
 
@@ -80,7 +87,6 @@ NOTEBOOK_DOCUMENT_MUTATION_TIMEOUT_S = max(
 _code_run_by_path: dict[str, str] = {}
 _DEFAULT_BUILD_PDF_CONTEXT = build_pdf_context
 _INSPYRO_CELL_TYPES = {"code", "markdown", "docx"}
-_PERSISTENCE_SAFE_CELL_TYPES = _INSPYRO_CELL_TYPES | {"raw"}
 _DOCX_SOURCE_HINTS = (
     "build_doc(",
     "doc_begin(",
@@ -149,20 +155,17 @@ def _serialize_notebook_cell_source(raw_source) -> str:
 
 def _normalize_notebook_cell_type(raw_cell_type) -> str:
     cell_type = str(raw_cell_type or "code").strip().lower() or "code"
-    return cell_type if cell_type in _PERSISTENCE_SAFE_CELL_TYPES else "code"
+    return cell_type if cell_type in (_INSPYRO_CELL_TYPES | {"raw"}) else "code"
+
+
+def _logical_notebook_cell_type(cell: dict) -> str:
+    kind = logical_cell_kind(cell, source_detector=_looks_like_docx_cell_source)
+    return kind if kind in (_INSPYRO_CELL_TYPES | {"raw"}) else "code"
 
 
 def _looks_like_docx_cell_source(raw_source) -> bool:
     source = _serialize_notebook_cell_source(raw_source)
     return any(hint in source for hint in _DOCX_SOURCE_HINTS)
-
-
-def _has_custom_notebook_cell_types(notebook_payload: dict) -> bool:
-    return any(
-        _normalize_notebook_cell_type(cell.get("cell_type")) not in {"code", "markdown"}
-        for cell in notebook_payload.get("cells", [])
-        if isinstance(cell, dict)
-    )
 
 
 def _restore_kernel_docx_snapshot(kernel_id: str) -> tuple[str | None, str | None]:
@@ -340,16 +343,17 @@ def _ensure_notebook_cell_ids(notebook_payload):
             metadata = {**metadata, "inspyro_id": cell_id}
             cell_changed = True
 
-        cell_type = _normalize_notebook_cell_type(cell.get("cell_type"))
-        if cell_type == "code" and _looks_like_docx_cell_source(cell.get("source")):
-            cell_type = "docx"
+        cell_type = _logical_notebook_cell_type(cell)
         if cell.get("cell_type") != cell_type:
             cell_changed = True
 
         if cell_changed:
             changed = True
-            next_cells.append({**cell, "id": cell_id, "cell_type": cell_type, "metadata": metadata})
+            updated_cell = {**cell, "id": cell_id, "cell_type": cell_type, "metadata": metadata}
+            mark_logical_cell_kind(updated_cell, cell_type, persistable=False)
+            next_cells.append(updated_cell)
         else:
+            mark_logical_cell_kind(cell, cell_type, persistable=False)
             next_cells.append(cell)
 
     if not changed:
@@ -405,6 +409,9 @@ async def handle_notebook_attach_kernel(message: dict, websocket: WebSocket):
                 source_kind="notebook",
                 state=(home_compact_store.get_runtime_by_kernel(kernel_id) or {}).get("state") or "idle",
             )
+        template_binding_status = template_binding.get_kernel_template_binding_status(kernel_id)
+        if template_binding_status is None and notebook_path:
+            template_binding_status = template_binding.inspect_notebook_template_binding(notebook_path, snapshot)
 
         await manager.send_personal_message(
             {
@@ -412,6 +419,7 @@ async def handle_notebook_attach_kernel(message: dict, websocket: WebSocket):
                 "kernel_id": kernel_id,
                 "notebook_path": notebook_path,
                 "notebook": snapshot,
+                "template_binding": template_binding_status,
                 "request_id": request_id,
             },
             websocket,
@@ -444,10 +452,14 @@ async def handle_notebook_create(message: dict, websocket: WebSocket):
 
         kernel_id = await jupyter_kernel_manager.start_kernel("python3", cwd=cwd)
         await _bind_kernel_for_current_connection(websocket, kernel_id)
-        set_kernel_docx_source(kernel_id, source_path=message.get("path"), source_kind="notebook")
+        raw_notebook_path = message.get("path")
+        created_notebook_path = None
+        if raw_notebook_path and str(raw_notebook_path).strip().lower().endswith(".ipynb"):
+            created_notebook_path = str(Path(str(raw_notebook_path)).expanduser().resolve())
+        set_kernel_docx_source(kernel_id, source_path=created_notebook_path or raw_notebook_path, source_kind="notebook")
         home_compact_store.register_notebook_runtime(
             kernel_id=kernel_id,
-            notebook_path=message.get("path"),
+            notebook_path=created_notebook_path or message.get("path"),
             source_kind="notebook",
             state="idle",
         )
@@ -479,6 +491,24 @@ async def handle_notebook_create(message: dict, websocket: WebSocket):
         else:
             notebook_payload = {"cells": [{"id": str(uuid4()), "cell_type": "code", "source": ["# Bienvenido"], "outputs": []}], "metadata": {}}
 
+        inherited_template_binding = None
+        if created_notebook_path:
+            notebook_payload, inherited_template_binding = template_binding.inherit_workspace_default_template_binding(
+                notebook_payload,
+                created_notebook_path,
+            )
+        template_binding_status = (
+            await template_binding.apply_notebook_template_binding_to_kernel(
+                kernel_id=kernel_id,
+                notebook_path=created_notebook_path,
+                notebook=notebook_payload,
+            )
+            if created_notebook_path
+            else {"status": "none", "binding": None}
+        )
+        if inherited_template_binding and template_binding_status.get("status") == "none":
+            template_binding_status = inherited_template_binding
+
         set_kernel_notebook_snapshot(kernel_id, notebook_payload)
 
         await manager.send_personal_message(
@@ -491,6 +521,7 @@ async def handle_notebook_create(message: dict, websocket: WebSocket):
                     else None
                 ),
                 "notebook": notebook_payload,
+                "template_binding": template_binding_status,
                 "request_id": request_id,
             },
             websocket,
@@ -519,28 +550,35 @@ async def handle_notebook_load(message: dict, websocket: WebSocket):
         cwd = message.get("cwd") or (os.path.dirname(message.get("path")) if message.get("path") else None)
         kernel_id = await jupyter_kernel_manager.start_kernel("python3", cwd=cwd)
         await _bind_kernel_for_current_connection(websocket, kernel_id)
-        set_kernel_docx_source(kernel_id, source_path=message.get("path"), source_kind="notebook")
+        resolved_notebook_path = (
+            str(Path(str(message.get("path"))).expanduser().resolve())
+            if message.get("path")
+            else None
+        )
+        set_kernel_docx_source(kernel_id, source_path=resolved_notebook_path, source_kind="notebook")
         home_compact_store.register_notebook_runtime(
             kernel_id=kernel_id,
-            notebook_path=message.get("path"),
+            notebook_path=resolved_notebook_path,
             source_kind="notebook",
             state="idle",
         )
         notebook_cumulative_graphs[kernel_id] = {"nodes": [], "links": []}
         notebook_cumulative_variables[kernel_id] = {}
         notebook_cumulative_call_stacks[kernel_id] = []
+        template_binding_status = await template_binding.apply_notebook_template_binding_to_kernel(
+            kernel_id=kernel_id,
+            notebook_path=resolved_notebook_path,
+            notebook=notebook_payload,
+        )
         set_kernel_notebook_snapshot(kernel_id, notebook_payload)
 
         await manager.send_personal_message(
             {
                 "type": "notebook_loaded",
                 "kernel_id": kernel_id,
-                "notebook_path": (
-                    str(Path(str(message.get("path"))).expanduser().resolve())
-                    if message.get("path")
-                    else None
-                ),
+                "notebook_path": resolved_notebook_path,
                 "notebook": notebook_payload,
+                "template_binding": template_binding_status,
                 "request_id": request_id,
             },
             websocket,
@@ -558,21 +596,12 @@ async def handle_notebook_save(message: dict, websocket: WebSocket):
     request_id = message.get("request_id")
     try:
         notebook_data = _ensure_notebook_cell_ids(message.get("notebook") or {})
-        if _has_custom_notebook_cell_types(notebook_data):
-            content = json.dumps(notebook_data, ensure_ascii=False, indent=1)
-        elif nbformat:
-            nb = new_notebook(cells=[], metadata=notebook_data.get("metadata", {}))
-            for cell in notebook_data.get("cells", []):
-                cell_type = _normalize_notebook_cell_type(cell.get("cell_type", "code"))
-                source = _serialize_notebook_cell_source(cell.get("source", []))
-                if cell_type == "markdown": nb_cell = new_markdown_cell(source=source)
-                else: nb_cell = new_code_cell(source=source, execution_count=cell.get("execution_count"), outputs=cell.get("outputs", []))
-                nb_cell["id"] = cell.get("id", str(uuid4()))
-                nb_cell["metadata"] = cell.get("metadata", {})
-                nb.cells.append(nb_cell)
-            content = nbformat.writes(nb, version=4)
-        else:
-            content = json.dumps(notebook_data, ensure_ascii=False, indent=1)
+        persisted_notebook = canonicalize_notebook_for_persistence(
+            notebook_data,
+            source_detector=_looks_like_docx_cell_source,
+        )
+        validate_persisted_notebook(persisted_notebook)
+        content = json.dumps(persisted_notebook, ensure_ascii=False, indent=1)
         await manager.send_personal_message(
             {
                 "type": "notebook_saved",
@@ -605,7 +634,12 @@ async def handle_notebook_execute_cell(message: dict, websocket: WebSocket):
         raw_source = message.get("source", [])
         source_code = _serialize_notebook_cell_source(raw_source)
         set_kernel_docx_source(kernel_id, source_path=message.get("path"), source_kind="notebook")
-        emit_docx_requested = bool(message.get("emit_docx", False)) or bool(os.getenv('INSPYRO_TEST_FORCE_DOCX'))
+        message_cell_type = _normalize_notebook_cell_type(message.get("cell_type"))
+        emit_docx_requested = (
+            message_cell_type == "docx"
+            or bool(message.get("emit_docx", False))
+            or bool(os.getenv('INSPYRO_TEST_FORCE_DOCX'))
+        )
         
         instrumented_code = _build_notebook_instrumented_code(
             source_code=source_code,

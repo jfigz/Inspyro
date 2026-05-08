@@ -2,6 +2,7 @@ import {
   TEMPLATE_FONT_SUGGESTIONS,
   collectTemplateFontOptions,
   fontToRpr,
+  getFontAvailabilityInfo,
 } from './fontUtils';
 
 describe('fontUtils', () => {
@@ -65,5 +66,26 @@ describe('fontUtils', () => {
       { tag: 'sz', attrs: { val: '22' } },
       { tag: 'b', attrs: {} },
     ]);
+  });
+
+  it('reports installed Word fallback aliases for missing legacy fonts', () => {
+    const availability = getFontAvailabilityInfo(
+      'CG Times (W1)',
+      ['Arial', 'Times New Roman'],
+      {
+        font_table: {
+          fonts: [
+            { name: 'CG Times (W1)', alt_name: 'Times New Roman' },
+          ],
+        },
+      },
+    );
+
+    expect(availability).toEqual(expect.objectContaining({
+      available: false,
+      reason: 'system_catalog',
+      fallback_font_name: 'Times New Roman',
+      fallback_available: true,
+    }));
   });
 });

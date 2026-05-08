@@ -55,7 +55,9 @@ def test_export_template_rejects_missing_template(monkeypatch) -> None:
     response = client.get("/api/templates/export", params={"kernel_id": "kernel-template"})
 
     assert response.status_code == 404
-    assert "plantilla activa" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "missing_active_template"
+    assert "plantilla activa" in detail["message"]
 
 
 def test_export_template_rejects_missing_docx(tmp_path, monkeypatch) -> None:
@@ -67,7 +69,9 @@ def test_export_template_rejects_missing_docx(tmp_path, monkeypatch) -> None:
     response = client.get("/api/templates/export", params={"kernel_id": "kernel-template"})
 
     assert response.status_code == 404
-    assert "DOCX" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "missing_template_docx_file"
+    assert "DOCX" in detail["message"]
 
 
 def test_export_template_rejects_empty_docx(tmp_path, monkeypatch) -> None:
@@ -80,4 +84,6 @@ def test_export_template_rejects_empty_docx(tmp_path, monkeypatch) -> None:
     response = client.get("/api/templates/export", params={"kernel_id": "kernel-template"})
 
     assert response.status_code == 500
-    assert "vacio" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "empty_template_docx"
+    assert "vacio" in detail["message"]

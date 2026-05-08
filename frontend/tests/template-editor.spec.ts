@@ -13,7 +13,7 @@ import {
 const { restoreSeedFixtures } = require('./helpers/inspyroHarness');
 
 test.describe.serial('Template Editor', () => {
-  test('uploads a DOCX template, renders preview and applies direct table format', async ({ page, harness }) => {
+  test('uploads a DOCX template, shows internal preview and applies direct table format', async ({ page, harness }) => {
     restoreSeedFixtures(harness, 'seeded');
 
     await gotoShell(page);
@@ -43,11 +43,9 @@ test.describe.serial('Template Editor', () => {
       await normalStyle.click();
     }
 
-    const renderButton = page.getByRole('button', { name: /Renderizar/i });
-    if (await renderButton.isEnabled().catch(() => false)) {
-      await renderButton.click();
-    }
-    await expect(page.locator('.preview-status-line')).toBeVisible({ timeout: 60000 });
+    await expect(page.getByTestId('template-internal-preview')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('template-native-word-preview')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.preview-status-line')).toContainText(/Preview interno/i, { timeout: 15000 });
 
     for (const viewport of [
       { width: 1366, height: 768 },

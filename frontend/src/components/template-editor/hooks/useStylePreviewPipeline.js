@@ -76,7 +76,7 @@ export const useStylePreviewPipeline = ({
     return cached;
   }, []);
 
-  const sendPreviewRequest = useCallback((previewKey, previewPayload) => {
+  const sendPreviewRequest = useCallback((previewKey, previewPayload, options = {}) => {
     if (!sendMessage || !kernelId) return;
 
     const previous = previewInFlightRef.current;
@@ -98,13 +98,19 @@ export const useStylePreviewPipeline = ({
       ...previewPayload,
       preview_key: previewPayload?.preview_key || previewKey,
     };
+    const previewEngine = options.previewEngine || previewPayload?.preview_engine || null;
 
-    sendMessage({
+    const message = {
       type: 'template_preview_style',
       request_id: requestId,
       kernel_id: kernelId,
       ...payload,
-    });
+    };
+    if (previewEngine) {
+      message.preview_engine = previewEngine;
+      message.native_word_preview = previewEngine === 'word_native';
+    }
+    sendMessage(message);
 
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
@@ -174,7 +180,7 @@ export const useStylePreviewPipeline = ({
         style_props: normalizedProps,
         preview_key: previewKey,
         force_refresh: force,
-      });
+      }, options);
     };
 
     previewPendingRef.current.timerId = setTimeout(

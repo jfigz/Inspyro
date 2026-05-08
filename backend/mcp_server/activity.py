@@ -72,7 +72,7 @@ _NOTEBOOK_MUTATION_TOOLS = {
     "cancel_run",
     "resume_run",
 }
-_TEMPLATE_MUTATION_TOOLS = {"upload_template", "delete_template", "update_template_style"}
+_TEMPLATE_MUTATION_TOOLS = {"upload_template", "delete_template", "update_template_style", "bind_template_to_notebook"}
 _DOCUMENT_MUTATION_TOOLS = {
     "check_document_quality",
     "run_document_workbench",

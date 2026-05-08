@@ -51,6 +51,7 @@ EXPECTED_AUTHORING_TOOLS = {
     "export_document_pdf",
     "reconvert_pdf",
     "upload_template",
+    "bind_template_to_notebook",
     "get_template_info",
     "delete_template",
     "update_template_style",
@@ -641,6 +642,7 @@ async def test_mcp_ai_first_catalog_exposes_guides_and_prompts(fake_bridge: Fake
         assert "cancel_run" in tool_names
         assert "resume_run" in tool_names
         assert "close_session_notebook" in tool_names
+        assert "bind_template_to_notebook" in tool_names
         assert "list_component_profiles" in tool_names
         assert "set_component_profile" in tool_names
         assert "create_kernel" not in tool_names

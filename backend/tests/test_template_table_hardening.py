@@ -20,6 +20,7 @@ except Exception:
     HAS_TEST_DOCX = False
 
 from app.routers import notebook as notebook_router
+from app.routers import notebook_template as notebook_template_router
 from app.services import template_service
 
 
@@ -34,6 +35,123 @@ class TestTemplateTableHardening(unittest.TestCase):
         if tbl_pr is None:
             return []
         return [template_service._local_name(child.tag) for child in list(tbl_pr)]
+
+    def _append_table_style(
+        self,
+        styles_root: ET.Element,
+        style_id: str,
+        style_name: str,
+        *,
+        border_color: str | None = None,
+    ) -> None:
+        style = ET.SubElement(styles_root, template_service._qn("w", "style"))
+        style.set(template_service._qn("w", "type"), "table")
+        style.set(template_service._qn("w", "styleId"), style_id)
+        name = ET.SubElement(style, template_service._qn("w", "name"))
+        name.set(template_service._qn("w", "val"), style_name)
+        based_on = ET.SubElement(style, template_service._qn("w", "basedOn"))
+        based_on.set(template_service._qn("w", "val"), "TableNormal")
+        tbl_pr = ET.SubElement(style, template_service._qn("w", "tblPr"))
+        if not border_color:
+            return
+        borders = ET.SubElement(tbl_pr, template_service._qn("w", "tblBorders"))
+        for tag in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            border = ET.SubElement(borders, template_service._qn("w", tag))
+            border.set(template_service._qn("w", "val"), "single")
+            border.set(template_service._qn("w", "sz"), "4")
+            border.set(template_service._qn("w", "color"), border_color)
+
+    def _build_docx_with_table_style_reference(
+        self,
+        tmp_dir: str,
+        *,
+        source_style_id: str = "SourceGrid",
+        source_style_name: str = "Source Grid",
+        source_border_color: str | None = "999999",
+        target_style_id: str = "TargetGrid",
+        target_style_name: str = "Target Grid",
+        target_border_color: str = "FF0000",
+    ) -> Path:
+        if not HAS_TEST_DOCX:
+            self.skipTest("python-docx no disponible")
+
+        docx_path = Path(tmp_dir) / "style_source.docx"
+        doc = Document()
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "A"
+        table.cell(0, 1).text = "B"
+        table.cell(1, 0).text = "1"
+        table.cell(1, 1).text = "2"
+        doc.save(str(docx_path))
+
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            document_xml = zin.read("word/document.xml")
+            styles_xml = zin.read("word/styles.xml")
+
+        document_root = ET.fromstring(document_xml)
+        tbl = document_root.find(".//" + template_service._qn("w", "tbl"))
+        self.assertIsNotNone(tbl)
+        tbl_pr = tbl.find(template_service._qn("w", "tblPr"))
+        if tbl_pr is None:
+            tbl_pr = ET.Element(template_service._qn("w", "tblPr"))
+            tbl.insert(0, tbl_pr)
+        for tag in ("tblBorders",):
+            for old in list(tbl_pr.findall(template_service._qn("w", tag))):
+                tbl_pr.remove(old)
+        tbl_style = tbl_pr.find(template_service._qn("w", "tblStyle"))
+        if tbl_style is None:
+            tbl_style = ET.SubElement(tbl_pr, template_service._qn("w", "tblStyle"))
+        tbl_style.set(template_service._qn("w", "val"), source_style_id)
+
+        styles_root = ET.fromstring(styles_xml)
+        if source_border_color is not None:
+            self._append_table_style(
+                styles_root,
+                source_style_id,
+                source_style_name,
+                border_color=source_border_color,
+            )
+        self._append_table_style(
+            styles_root,
+            target_style_id,
+            target_style_name,
+            border_color=target_border_color,
+        )
+
+        namespace_hints = template_service._collect_docx_namespace_hints_from_path(docx_path)
+        updated_document = template_service._serialize_ooxml_part(
+            document_root,
+            document_xml,
+            namespace_hints=namespace_hints,
+        )
+        updated_styles = template_service._serialize_ooxml_part(
+            styles_root,
+            styles_xml,
+            namespace_hints=namespace_hints,
+        )
+        template_service._write_docx_parts(
+            docx_path,
+            {
+                "word/document.xml": updated_document,
+                "word/styles.xml": updated_styles,
+            },
+        )
+        return docx_path
+
+    def _read_style_border_colors(self, docx_path: Path, style_id: str) -> dict[str, str | None]:
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            styles_xml = zin.read("word/styles.xml")
+        styles_root = ET.fromstring(styles_xml)
+        style_elem = template_service._find_style_element(styles_root, None, style_id)
+        self.assertIsNotNone(style_elem)
+        tbl_pr = style_elem.find("w:tblPr", template_service.DOCX_NS)
+        borders = tbl_pr.find("w:tblBorders", template_service.DOCX_NS) if tbl_pr is not None else None
+        self.assertIsNotNone(borders)
+        colors: dict[str, str | None] = {}
+        for tag in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            border = borders.find(template_service._qn("w", tag))
+            colors[tag] = border.get(template_service._qn("w", "color")) if border is not None else None
+        return colors
 
     def _inject_legacy_runtime_nodes(self, docx_bytes: bytes, style_id: str = "TableGrid") -> bytes:
         parts = template_service._read_docx_parts(docx_bytes, ["word/styles.xml"])
@@ -120,6 +238,116 @@ class TestTemplateTableHardening(unittest.TestCase):
         )
         self.assertTrue(overridden["firstRow"])
         self.assertFalse(overridden["noVBand"])
+
+    def test_apply_table_runtime_defaults_to_preview_table_uses_docx_oxml(self):
+        if not (template_service.HAS_DOCX and HAS_TEST_DOCX):
+            self.skipTest("python-docx no disponible")
+
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        runtime_defaults = {
+            "look": {
+                "firstRow": True,
+                "firstColumn": False,
+                "noHBand": False,
+                "noVBand": True,
+            },
+            "layout_type": "fixed",
+            "width_type": "pct",
+            "width_value": 5000,
+        }
+
+        with patch.object(template_service._logger, "warning") as warning_mock:
+            template_service._apply_table_runtime_defaults_to_preview_table(table, runtime_defaults)
+
+        warning_mock.assert_not_called()
+        tbl_pr = table._tbl.find(template_service.docx_qn("w:tblPr"))
+        self.assertIsNotNone(tbl_pr)
+        tbl_look = tbl_pr.find(template_service.docx_qn("w:tblLook"))
+        tbl_layout = tbl_pr.find(template_service.docx_qn("w:tblLayout"))
+        tbl_w = tbl_pr.find(template_service.docx_qn("w:tblW"))
+
+        self.assertIsNotNone(tbl_look)
+        self.assertIsNotNone(tbl_layout)
+        self.assertIsNotNone(tbl_w)
+        self.assertEqual(tbl_look.get(template_service.docx_qn("w:firstRow")), "1")
+        self.assertEqual(tbl_look.get(template_service.docx_qn("w:noVBand")), "1")
+        self.assertEqual(tbl_layout.get(template_service.docx_qn("w:type")), "fixed")
+        self.assertEqual(tbl_w.get(template_service.docx_qn("w:type")), "pct")
+        self.assertEqual(tbl_w.get(template_service.docx_qn("w:w")), "5000")
+
+    def test_apply_table_format_preserves_target_borders_when_source_has_no_direct_borders(self):
+        if not (template_service.HAS_DOCX and HAS_TEST_DOCX):
+            self.skipTest("python-docx no disponible")
+
+        with TemporaryDirectory() as tmp_dir:
+            original_template_dir = template_service.TEMPLATE_DIR
+            template_service.TEMPLATE_DIR = Path(tmp_dir) / "templates"
+            try:
+                kernel_id = "kernel-preserve-target-borders"
+                docx_path = self._build_docx_with_table_style_reference(
+                    tmp_dir,
+                    source_style_id="MissingSourceGrid",
+                    source_border_color=None,
+                    target_border_color="FF0000",
+                )
+                docx_bytes = docx_path.read_bytes()
+                template_service.save_template(
+                    kernel_id,
+                    docx_bytes,
+                    template_service.extract_styles_from_docx(docx_bytes),
+                )
+
+                updated = template_service.apply_table_format_to_style(
+                    kernel_id,
+                    0,
+                    "Target Grid",
+                    "TargetGrid",
+                )
+
+                self.assertIsNotNone(updated)
+                saved_path = template_service._get_template_docx_path(kernel_id)
+                border_colors = self._read_style_border_colors(saved_path, "TargetGrid")
+                self.assertEqual(set(border_colors.values()), {"FF0000"})
+            finally:
+                template_service.TEMPLATE_DIR = original_template_dir
+
+    def test_apply_table_format_copies_effective_source_table_style_borders(self):
+        if not (template_service.HAS_DOCX and HAS_TEST_DOCX):
+            self.skipTest("python-docx no disponible")
+
+        with TemporaryDirectory() as tmp_dir:
+            original_template_dir = template_service.TEMPLATE_DIR
+            template_service.TEMPLATE_DIR = Path(tmp_dir) / "templates"
+            try:
+                kernel_id = "kernel-copy-source-style"
+                docx_path = self._build_docx_with_table_style_reference(
+                    tmp_dir,
+                    source_style_id="SourceGrid",
+                    source_style_name="Source Grid",
+                    source_border_color="999999",
+                    target_border_color="FF0000",
+                )
+                docx_bytes = docx_path.read_bytes()
+                template_service.save_template(
+                    kernel_id,
+                    docx_bytes,
+                    template_service.extract_styles_from_docx(docx_bytes),
+                )
+
+                updated = template_service.apply_table_format_to_style(
+                    kernel_id,
+                    0,
+                    "Target Grid",
+                    "TargetGrid",
+                )
+
+                self.assertIsNotNone(updated)
+                saved_path = template_service._get_template_docx_path(kernel_id)
+                border_colors = self._read_style_border_colors(saved_path, "TargetGrid")
+                self.assertEqual(set(border_colors.values()), {"999999"})
+            finally:
+                template_service.TEMPLATE_DIR = original_template_dir
 
     def test_extract_styles_from_docx_reads_header_footer_text_from_ooxml_parts(self):
         if not (template_service.HAS_DOCX and HAS_TEST_DOCX):
@@ -755,6 +983,42 @@ class TestTemplateTableRouterValidation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload.get("type"), "template_semantic_slots_updated")
         self.assertEqual(payload.get("kernel_id"), "kernel-router")
         self.assertEqual(payload.get("request_id"), "req-slots-1")
+
+    async def test_template_preview_style_marks_native_word_request(self):
+        message = {
+            "type": "template_preview_style",
+            "kernel_id": "kernel-router",
+            "request_id": "req-native-preview",
+            "preview_key": "preview-native",
+            "preview_engine": "word_native",
+            "native_word_preview": True,
+            "style_name": "Body Text",
+            "style_props": {"style_id": "BodyText"},
+        }
+        websocket = object()
+
+        async def current(*_args, **_kwargs):
+            return True
+
+        with patch.object(notebook_template_router, "_bind_template_kernel_connection", new=AsyncMock()):
+            with patch.object(notebook_template_router, "_register_preview_request", new=AsyncMock(return_value=("kernel-router", "preview-native"))):
+                with patch.object(notebook_template_router, "_is_preview_request_current", new=AsyncMock(side_effect=current)):
+                    with patch.object(notebook_template_router, "_complete_preview_request", new=AsyncMock()):
+                        with patch.object(notebook_template_router.template_preview, "get_preview_cache", return_value=None):
+                            with patch.object(notebook_template_router.template_preview, "set_preview_cache") as cache_mock:
+                                with patch.object(notebook_template_router.template_service, "run_template_executor", new=AsyncMock(return_value="PNG_BASE64")) as run_mock:
+                                    with patch.object(notebook_template_router.manager, "send_personal_message", new=AsyncMock()) as send_mock:
+                                        await notebook_template_router.handle_template_preview_style(message, websocket)
+
+        run_mock.assert_awaited_once()
+        style_props = run_mock.await_args.args[3]
+        self.assertEqual(style_props.get("_preview_engine"), "word_native")
+        self.assertTrue(style_props.get("native_word_preview"))
+        cache_mock.assert_called_once_with("preview-native", "PNG_BASE64", "kernel-router")
+        send_mock.assert_awaited_once()
+        payload = send_mock.await_args.args[0]
+        self.assertEqual(payload.get("type"), "template_preview_ready")
+        self.assertEqual(payload.get("request_id"), "req-native-preview")
 
 
 class TestFreezeHeaderFooterTableStyles(unittest.TestCase):

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import asyncio
 import json
@@ -61,7 +61,7 @@ DOCUMENT_PIPELINE_STABILIZATION_DELAY_S = max(
 DOCX_DEFAULT_FILENAME = "inspyro_document.docx"
 PDF_DEFAULT_FILENAME = "inspyro_document.pdf"
 DOCX_EXCHANGE_DIR_PREFIX = "inspyro-docx-export-"
-DOCX_EMPTY_EXECUTION_WARNING = "La celda no generÃ³ contenido DOCX real; se conserva el Ãºltimo documento vÃ¡lido."
+DOCX_EMPTY_EXECUTION_WARNING = "La celda no generÃƒÂ³ contenido DOCX real; se conserva el ÃƒÂºltimo documento vÃƒÂ¡lido."
 DOCUMENT_PROGRESS_STAGE_PERCENTS: dict[str, int] = {
     "queued": 8,
     "docx_export": 30,
@@ -70,7 +70,7 @@ DOCUMENT_PROGRESS_STAGE_PERCENTS: dict[str, int] = {
 }
 _SOURCE_FIELD_MISSING = object()
 
-# Tareas activas por cliente (re-exportar o usar desde aquÃ­)
+# Tareas activas por cliente (re-exportar o usar desde aquÃƒÂ­)
 @dataclass(frozen=True)
 class DocumentJobRequest:
     kernel_id: str
@@ -796,7 +796,7 @@ async def _document_pipeline_runner(kernel_id: str) -> None:
             return
 
 # =============================================================================
-# FUNCIONES CORE (InstrumentaciÃ³n, EjecuciÃ³n, PDF Background)
+# FUNCIONES CORE (InstrumentaciÃƒÂ³n, EjecuciÃƒÂ³n, PDF Background)
 # =============================================================================
 
 def _build_notebook_instrumented_code(*, source_code: str, cell_id: str, cell_index: Optional[int], emit_docx: bool, docx_validation: bool = True, skip_docx_export: bool = False) -> str:
@@ -857,10 +857,10 @@ else:
 import sys as __sys, os as __os
 __DOCX_BR={_BACKEND_ROOT!r}
 if __DOCX_BR not in __sys.path: __sys.path.insert(0, __DOCX_BR)
-if any(__name not in globals() for __name in ('build_doc', 'doc_begin', 'doc_block', 'doc_end', 'doc_export', 'doc_export_provenance', 'doc_start_cell', 'doc_finish_cell', 'EquationLatex', 'get_session')):
+if any(__name not in globals() for __name in ('build_doc', 'doc_begin', 'doc_block', 'doc_end', 'doc_export', 'doc_export_provenance', 'doc_finalize', 'doc_start_cell', 'doc_finish_cell', 'EquationLatex', 'get_session')):
     try:
         from librerias_propias.math_to_docx import (
-            build_doc, doc_begin, doc_block, doc_end, doc_export, doc_export_provenance, doc_help, doc_reset,
+            build_doc, doc_begin, doc_block, doc_end, doc_export, doc_export_provenance, doc_finalize, doc_help, doc_reset,
             Heading, Text, List, Code, Link, Equation, EquationLatex, Reference, Image, Figure,
             Caption, Table, DataFrame, Section, TableOfContents, PageBreak,
             Metadata, Style, Header, Footer, doc_start_cell, doc_finish_cell, get_session
@@ -899,7 +899,7 @@ if __DOCX_IMPORT_ERROR is None:
         return __INSP_DOCX_RAW_DOC_BEGIN(*args, **__insp_docx_bind_owner(kwargs))
     import builtins as __insp_docx_builtins
     for __name in (
-        'build_doc', 'doc_begin', 'doc_block', 'doc_end', 'doc_export', 'doc_export_provenance', 'doc_help', 'doc_reset', 'get_session',
+        'build_doc', 'doc_begin', 'doc_block', 'doc_end', 'doc_export', 'doc_export_provenance', 'doc_finalize', 'doc_help', 'doc_reset', 'get_session',
         'Heading', 'Text', 'List', 'Code', 'Link', 'Equation', 'EquationLatex', 'Reference', 'Image', 'Figure',
         'Caption', 'Table', 'DataFrame', 'Section', 'TableOfContents', 'PageBreak',
         'Metadata', 'Style', 'Header', 'Footer', 'doc_start_cell', 'doc_finish_cell'
@@ -1949,7 +1949,7 @@ async def _recover_docx_and_emit_updates_background(
 
 
 # =============================================================================
-# FUNCIONES EJECUCIÃ“N AISLADA (Legacy/Simple Mode)
+# FUNCIONES EJECUCIÃƒâ€œN AISLADA (Legacy/Simple Mode)
 # =============================================================================
 
 def execute_code_isolated(code: str):
@@ -1960,7 +1960,7 @@ def execute_code_isolated(code: str):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as fvars:
         var_path = fvars.name
     
-    script = f"import sys, json, io, base64, traceback, os as _os\nBR={_BACKEND_ROOT!r}\nif BR not in sys.path: sys.path.insert(0, BR)\ndef is_user_defined_variable(n,v):\n    if n.startswith('__') and n.endswith('__'): return False\n    if n in ('json','sys','traceback','__builtins__','is_user_defined_variable','serialize_value'): return False\n    if callable(v) and getattr(v,'__module__',None) in ('builtins',None): return False\n    return True\ndef serialize_value(v):\n    try:\n        t=type(v).__name__\n        if v is None or isinstance(v,(int,float,bool,str)): return {{'type':t,'len':len(v),'repr':repr(v)[:100]}}\n        if isinstance(v,(list,tuple,set)): return {{'type':t,'len':len(v),'repr':repr(list(v))[:100]}}\n        if isinstance(v,dict): return {{'type':'dict','len':len(v),'repr':repr(v)[:100]}}\n        return {{'type':t,'repr':repr(v)[:100]}}\n    except Exception as e: return {{'type':'error','repr':str(e)}}\ntry:\n    from librerias_propias.math_to_docx import (\n        build_doc, doc_begin, doc_block, doc_end, doc_export, doc_help, doc_reset, get_session,\n        Heading, Text, List, Code, Link, Equation, EquationLatex, Reference, Image, Figure,\n        Caption, Table, DataFrame, Section, TableOfContents, PageBreak,\n        Metadata, Style, Header, Footer, doc_start_cell, doc_finish_cell,\n    )\n    __DOCX_EDITOR_ORDER = globals().get('__DOCX_EDITOR_ORDER', 0) + 1\n    globals()['__DOCX_EDITOR_ORDER'] = __DOCX_EDITOR_ORDER\n    __DOCX_EDITOR_CELL_ID = f\"__editor_cell__{{__DOCX_EDITOR_ORDER}}\"\n    __DOCX_EDITOR_BLOCK_ID = f\"__editor_block__{{__DOCX_EDITOR_ORDER}}\"\n    try: doc_start_cell(notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n    except Exception: pass\n    _DOCX_BUILDER = doc_begin(block_id=__DOCX_EDITOR_BLOCK_ID, auto_clear=True, order=__DOCX_EDITOR_ORDER, notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n    def mdoc(expr, label=None, number=False): Equation(expr, label=label, number=number)\n    def mdoc_latex(expr, label=None, number=False): EquationLatex(expr, label=label, number=number)\n    def txtdoc(text): Text(str(text))\n    def __export_docx_base64():\n        global _DOCX_BUILDER\n        try:\n            if _DOCX_BUILDER is not None:\n                doc_end()\n                doc_finish_cell(notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n                _DOCX_BUILDER = None\n        except Exception: pass\n        return get_session().export_docx_base64()\nexcept Exception: _DOCX_BUILDER = None\ncode={code!r}\ng={{'__name__':'__main__'}}\nfor _name in ('mdoc','mdoc_latex','txtdoc','__export_docx_base64'):\n    if _name in globals(): g[_name]=globals()[_name]\ntry: exec(code, g)\nexcept Exception: g['__exec_error__']=traceback.format_exc()\nuser_vars={{}}\nfor k,v in list(g.items()):\n    if is_user_defined_variable(k,v): user_vars[k]=serialize_value(v)\ntry:\n    with open({dep_path!r},'r') as f: dep_graph=json.load(f)\nexcept Exception: dep_graph={{'nodes':[], 'links':[]}}\nout={{'variables':user_vars,'dependency_graph':dep_graph}}\ntry:\n    if '__export_docx_base64' in g: out['docx_file_b64']=g['__export_docx_base64']()\nexcept Exception: out['docx_file_b64']=None\nif (not out.get('docx_file_b64')) and _os.getenv('INSPYRO_TEST_FORCE_DOCX'):\n    try:\n        from docx import Document\n        _d=Document(); _d.add_paragraph('(doc vacÃ­o aislado)'); _bio=io.BytesIO(); _d.save(_bio)\n        import base64 as _b64; out['docx_file_b64']=_b64.b64encode(_bio.getvalue()).decode('utf-8')\n    except Exception: pass\nwith open({var_path!r},'w') as f: json.dump(out,f)\n"
+    script = f"import sys, json, io, base64, traceback, os as _os\nBR={_BACKEND_ROOT!r}\nif BR not in sys.path: sys.path.insert(0, BR)\ndef is_user_defined_variable(n,v):\n    if n.startswith('__') and n.endswith('__'): return False\n    if n in ('json','sys','traceback','__builtins__','is_user_defined_variable','serialize_value'): return False\n    if callable(v) and getattr(v,'__module__',None) in ('builtins',None): return False\n    return True\ndef serialize_value(v):\n    try:\n        t=type(v).__name__\n        if v is None or isinstance(v,(int,float,bool,str)): return {{'type':t,'len':len(v),'repr':repr(v)[:100]}}\n        if isinstance(v,(list,tuple,set)): return {{'type':t,'len':len(v),'repr':repr(list(v))[:100]}}\n        if isinstance(v,dict): return {{'type':'dict','len':len(v),'repr':repr(v)[:100]}}\n        return {{'type':t,'repr':repr(v)[:100]}}\n    except Exception as e: return {{'type':'error','repr':str(e)}}\ntry:\n    from librerias_propias.math_to_docx import (\n        build_doc, doc_begin, doc_block, doc_end, doc_export, doc_finalize, doc_help, doc_reset, get_session,\n        Heading, Text, List, Code, Link, Equation, EquationLatex, Reference, Image, Figure,\n        Caption, Table, DataFrame, Section, TableOfContents, PageBreak,\n        Metadata, Style, Header, Footer, doc_start_cell, doc_finish_cell,\n    )\n    __DOCX_EDITOR_ORDER = globals().get('__DOCX_EDITOR_ORDER', 0) + 1\n    globals()['__DOCX_EDITOR_ORDER'] = __DOCX_EDITOR_ORDER\n    __DOCX_EDITOR_CELL_ID = f\"__editor_cell__{{__DOCX_EDITOR_ORDER}}\"\n    __DOCX_EDITOR_BLOCK_ID = f\"__editor_block__{{__DOCX_EDITOR_ORDER}}\"\n    try: doc_start_cell(notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n    except Exception: pass\n    _DOCX_BUILDER = doc_begin(block_id=__DOCX_EDITOR_BLOCK_ID, auto_clear=True, order=__DOCX_EDITOR_ORDER, notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n    def mdoc(expr, label=None, number=False): Equation(expr, label=label, number=number)\n    def mdoc_latex(expr, label=None, number=False): EquationLatex(expr, label=label, number=number)\n    def txtdoc(text): Text(str(text))\n    def __export_docx_base64():\n        global _DOCX_BUILDER\n        try:\n            if _DOCX_BUILDER is not None:\n                doc_end()\n                doc_finish_cell(notebook_cell_id=__DOCX_EDITOR_CELL_ID)\n                _DOCX_BUILDER = None\n        except Exception: pass\n        return get_session().export_docx_base64()\nexcept Exception: _DOCX_BUILDER = None\ncode={code!r}\ng={{'__name__':'__main__'}}\nfor _name in ('mdoc','mdoc_latex','txtdoc','doc_finalize','__export_docx_base64'):\n    if _name in globals(): g[_name]=globals()[_name]\ntry: exec(code, g)\nexcept Exception: g['__exec_error__']=traceback.format_exc()\nuser_vars={{}}\nfor k,v in list(g.items()):\n    if is_user_defined_variable(k,v): user_vars[k]=serialize_value(v)\ntry:\n    with open({dep_path!r},'r') as f: dep_graph=json.load(f)\nexcept Exception: dep_graph={{'nodes':[], 'links':[]}}\nout={{'variables':user_vars,'dependency_graph':dep_graph}}\ntry:\n    if '__export_docx_base64' in g: out['docx_file_b64']=g['__export_docx_base64']()\nexcept Exception: out['docx_file_b64']=None\nif (not out.get('docx_file_b64')) and _os.getenv('INSPYRO_TEST_FORCE_DOCX'):\n    try:\n        from docx import Document\n        _d=Document(); _d.add_paragraph('(doc vacÃƒÂ­o aislado)'); _bio=io.BytesIO(); _d.save(_bio)\n        import base64 as _b64; out['docx_file_b64']=_b64.b64encode(_bio.getvalue()).decode('utf-8')\n    except Exception: pass\nwith open({var_path!r},'w') as f: json.dump(out,f)\n"
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as tf:
         tf.write(script); script_path = tf.name
     try:
@@ -1972,7 +1972,7 @@ def execute_code_isolated(code: str):
         except Exception: pass
         return {'success': proc.returncode==0,'stdout':proc.stdout,'stderr':proc.stderr,'return_code':proc.returncode,'variables':variables,'dependency_graph':dependency_graph,'docx_file_b64':docx_b64}
     except subprocess.TimeoutExpired:
-        return {'success':False,'stdout':'','stderr':'ERROR: CÃ³digo cancelado por timeout (>10s)','return_code':-1,'variables':{},'dependency_graph':dependency_graph,'docx_file_b64':None}
+        return {'success':False,'stdout':'','stderr':'ERROR: CÃƒÂ³digo cancelado por timeout (>10s)','return_code':-1,'variables':{},'dependency_graph':dependency_graph,'docx_file_b64':None}
     except Exception as e:
         return {'success':False,'stdout':'','stderr':f'ERROR: {e}','return_code':-1,'variables':{},'dependency_graph':dependency_graph,'docx_file_b64':None}
     finally:
@@ -2009,7 +2009,7 @@ __DOCX_BR={_BACKEND_ROOT!r}
 if __DOCX_BR not in __sys.path: __sys.path.insert(0, __DOCX_BR)
 try:
     from librerias_propias.math_to_docx import (
-        build_doc, doc_begin, doc_block, doc_end, doc_export, doc_help, doc_reset, get_session,
+        build_doc, doc_begin, doc_block, doc_end, doc_export, doc_finalize, doc_help, doc_reset, get_session,
         Heading, Text, List, Code, Link, Equation, EquationLatex, Reference, Image, Figure,
         Caption, Table, DataFrame, Section, TableOfContents, PageBreak,
         Metadata, Style, Header, Footer, doc_start_cell, doc_finish_cell,

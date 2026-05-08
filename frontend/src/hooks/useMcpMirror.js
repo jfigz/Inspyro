@@ -83,6 +83,9 @@ export default function useMcpMirror({
   const pendingEventsRef = useRef([]);
   const flushTimerRef = useRef(null);
   const lastQueueMessageIdRef = useRef(0);
+  const modifiedFilesRef = useRef(modifiedFiles || new Set());
+
+  modifiedFilesRef.current = modifiedFiles || new Set();
 
   const rememberProcessedStep = useCallback((stepId) => {
     if (!stepId || processedStepIdSetRef.current.has(stepId)) return;
@@ -97,8 +100,8 @@ export default function useMcpMirror({
   const isTargetDirty = useCallback((path) => {
     const target = normalizePath(path);
     if (!target) return false;
-    return Array.from(modifiedFiles || []).some((candidate) => normalizePath(candidate) === target);
-  }, [modifiedFiles]);
+    return Array.from(modifiedFilesRef.current || []).some((candidate) => normalizePath(candidate) === target);
+  }, []);
 
   const findDirtyTargetPath = useCallback((paths) => {
     if (!Array.isArray(paths)) return null;

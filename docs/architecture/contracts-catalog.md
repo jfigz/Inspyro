@@ -1,6 +1,6 @@
 ﻿# Catálogo Canónico de Contratos (WS/REST)
 
-> **Última actualización:** 2026-05-03
+> **Última actualización:** 2026-05-08
 
 > **Fuente canónica de entrada WS:** `backend/main.py` (`websocket_endpoint`, `notebook_websocket_endpoint`).
 
@@ -148,7 +148,7 @@ Notas de payload:
 
 - `notebook_save` acepta payload real `{ notebook }`; no depende de `kernel_id` ni `path` para serializar el contenido persistible.
 
-- Los notebooks Inspyro aceptan `cells[].cell_type` en `code|markdown|docx`; `docx` es un tipo nativo de celda Python documental y debe preservarse al cargar/guardar/sincronizar. Al normalizar notebooks legacy, fuentes `code` con uso detectable de APIs DOCX pueden migrarse suavemente a `docx`.
+- Los notebooks Inspyro aceptan `cells[].cell_type` lógico en `code|markdown|docx` para UI/MCP/runtime. En disco, `.ipynb` debe persistir solo tipos Jupyter (`code|markdown|raw`); una celda documental se guarda como `cell_type="code"` + `metadata.inspyro.cell_kind="docx"`. Al normalizar notebooks legacy, `cell_type="docx"` o fuentes `code` con uso detectable de APIs DOCX pueden exponerse suavemente como `docx` y migrarse al guardar.
 
 - `notebook_execute_cell` acepta `execution_id` opcional para correlación de respuestas.
 
@@ -252,9 +252,9 @@ Notas de payload:
 
 - Mutaciones de template (`template_upload`, `template_delete`, `template_update_style`, `template_update_document_defaults`, `template_update_semantic_slots`, `template_create_style_from_table`, `template_apply_table_format`) aceptan `request_id` opcional y lo reflejan en respuestas `success/error`.
 
-- `template_update_style.updates` soporta formato dual: plano legacy (`font_size_pt`, `table_border_color`, etc.) y bloques aditivos (`font`, `paragraph`, `table`, `advanced_props`) normalizados en backend.
+- `template_update_style.updates` soporta formato dual: plano legacy (`font_size_pt`, `table_border_color`, etc.) y bloques aditivos (`font`, `paragraph`, `table`, `advanced_props`) normalizados en backend. Desde 2026-05-08 acepta además `word_style` como contenedor práctico de paridad Word (`metadata`, `visibility`, `font`/`run`, `paragraph`, `list`, `table`, `raw`/`advanced_props`) y `style_visibility` como alias top-level de visibilidad/galería (`hidden`, `semiHidden`, `qFormat`, `uiPriority`, `unhideWhenUsed`).
 
-- `template_update_document_defaults.updates` separa `font` y `paragraph`; backend materializa `w:docDefaults/w:rPrDefault/w:rPr` y `w:docDefaults/w:pPrDefault/w:pPr` en `styles.xml`, removiendo nodos/atributos conflictivos cuando un campo global se limpia para reactivar herencia de Word/theme.
+- `template_update_document_defaults.updates` separa `font` y `paragraph`; backend materializa `w:docDefaults/w:rPrDefault/w:rPr` y `w:docDefaults/w:pPrDefault/w:pPr` en `styles.xml`, removiendo nodos/atributos conflictivos cuando un campo global se limpia para reactivar herencia de Word/theme. El campo aditivo `word_defaults` puede transportar la misma intención como `{ run|font, paragraph }` para clientes Word-complete.
 
 - `template_update_semantic_slots.semantic_style_slots` persiste el mapeo Word-first de slots semánticos (`body`, `heading_1..6`, `list_bullet`, `list_number`, `caption`, `code`, `table_default`) hacia estilos Word reales del template; backend revalida cada slot contra `style_browser` y recompone heurísticas si el estilo quedó stale tras reextraer la plantilla.
 
@@ -356,11 +356,13 @@ Notas de payload:
 
 Notas de payload saliente:
 
-- `template_uploaded`, `template_info`, `template_style_updated`, `template_document_defaults_updated` y `template_semantic_slots_updated` pueden incluir metadata aditiva de fuentes/defaults del template: `default_font`, `default_font_source`, `font_catalog`, `system_font_catalog`, `builder_required_style_defaults`, `document_defaults` (`font`, `paragraph`, `font_source`, `paragraph_source`), `style_browser` (`categories`, `category_order`, `auto_selected`, `counts`) y `semantic_style_slots` como contrato Word-first persistido; cada estilo navegable puede exponer `selection_key`, `xml_font`, `xml_font_source`, `resolved_font`, `resolved_font_source` y alias `font_source` para explicar la procedencia efectiva sin romper clientes existentes.
+- `template_uploaded`, `template_info`, `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created` y `template_format_applied` pueden incluir metadata aditiva de fuentes/defaults del template: `default_font`, `default_font_source`, `font_catalog`, `system_font_catalog`, `builder_required_style_defaults`, `document_defaults` (`font`, `paragraph`, `font_source`, `paragraph_source`), `style_browser` (`categories`, `category_order`, `auto_selected`, `counts`) y `semantic_style_slots` como contrato Word-first persistido; cada estilo navegable puede exponer `selection_key`, `xml_font`, `xml_font_source`, `resolved_font`, `resolved_font_source`, alias `font_source`, `style_visibility` y `word_style` (`metadata`, `visibility`, `font`, `paragraph`, `list`, `table`, `raw`) para explicar la procedencia efectiva y propiedades OOXML avanzadas sin romper clientes existentes.
 
 - `template_document_defaults_updated` devuelve el `template` completo actualizado para que el shell rehidrate `Documento (Global)` sin hacer un `template_get` extra y mantenga sincronizado `templateInfo`.
 
 - `template_semantic_slots_updated` devuelve también el `template` completo actualizado para que el shell rehidrate la banda de slots semánticos sin un `template_get` adicional.
+
+- `template_style_created` y `template_format_applied` pueden devolver también el `template` completo actualizado; clientes modernos deben tratarlo como ACK autoritativo de mutación igual que `template_style_updated` y no necesitan emitir `template_get` extra.
 
 - `mcp_activity_event` es un contrato `S→C` aditivo para visualización MCP. Incluye `event_id`, `run_id`, `phase`, `status`, `tool_name`, `tool_group`, `summary`, `detail?`, `duration_ms?`, `error?`, `ts`, `client_id?`, `client_label?`, `transport?`, `resource` (`path?`, `notebook_path?`, `kernel_id?`, `cell_id?`, `execution_id?`) y `ui_hints` (`refresh_workspace`, `reload_path`, `show_agent_execution`, `refresh_preview`, `artifact`).
 
@@ -476,6 +478,8 @@ Notas de payload saliente:
 
 | GET | `/api/templates/export` | `backend/app/routers/templates.py` |
 
+| POST | `/api/templates/bind` | `backend/app/routers/templates.py` |
+
 | POST | `/api/units/convert` | `backend/app/routers/units.py` |
 
 | GET | `/api/units/catalog` | `backend/app/routers/units.py` |
@@ -503,6 +507,8 @@ Notas REST:
 `/api/templates/upload` retorna `template_token`, `size_bytes`, `sha256`; el attach real ocurre luego via `template_attach`, y la importación portable JSON del editor reutiliza exactamente esta ruta.
 
 `/api/templates/export` retorna un envelope portable con `schema_version`, `exported_at`, `kernel_id`, `template`, `docx_base64` y `file_name`; el JSON exportado persiste `semantic_style_slots` como contrato Word-first y solo acepta `category_overrides` como compatibilidad legacy de import.
+
+`POST /api/templates/bind` espera `{ kernel_id, notebook_path, notebook?, template_json_path? }`; exporta la plantilla activa como JSON portable `schema_version=1.1`, escribe por defecto `<notebook_stem>.inspyro-template.json` junto al `.ipynb`, parchea `metadata.inspyro.template_binding` con ruta relativa `path_base="notebook_dir"` y devuelve `{ binding, notebook, template_binding }`. El binding JSON del `.ipynb` es la fuente canónica; mirrors legacy bajo `<workspace>/.inspyro/templates/` quedan solo como fallback/migración.
 
 `GET /api/files/tree` se consume en modo lazy desde frontend (`depth=1` por defecto útil para explorer) y retorna metadata aditiva por nodo: `hasChildren`, `writable`, `hidden`, `symlink`, `modified`, `relativePath`.
 
@@ -541,6 +547,8 @@ Notas REST:
 `POST /api/mcp/activity/events` conserva el contrato previo y añade campos aditivos `client_id`, `client_label` y `transport` para correlacionar runs/feed por cliente sin romper consumidores existentes.
 
 `POST /api/templates/tokenize` convierte un `.docx` local seguro en `template_token` efímero para `template_attach`; la home lo usa para reatachar el espejo persistido de `<workspace>/.inspyro/templates/` antes de abrir el editor de template.
+
+`notebook_created`, `notebook_loaded`, `notebook_attached`, `notebook_kernel_reset` y los ACKs `template_uploaded`, `template_info`, `template_deleted`, `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created` y `template_format_applied` pueden incluir `template_binding` aditivo. Estados esperados: `none`, `bound`, `available`, `applied`, `updated`, `missing`, `error` e `inherited`; `missing`/`error` no bloquean ejecución del notebook.
 
 `/api/units/convert` acepta payload aditivo `{ magnitude: number|number[]|number[][], from_unit, to_unit, options?, uncertainty? }`; retorna `converted_magnitude`, `repr`, `category`, `metadata`, `dimension` y bloque `canonical` (`from_unit`, `to_unit`, `input_from`, `input_to`). `dimension` sale de la identidad canónica normalizada, no del orden textual incidental de Pint.
 

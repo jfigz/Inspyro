@@ -8,7 +8,8 @@ Variables de entorno soportadas:
 - INSPYRO_MCP_WAIT_FOR_BACKEND_SEC: Espera/reintento del backend antes de fallar (default: 0)
 - INSPYRO_MCP_MASK_ERROR_DETAILS:   Oculta detalles internos de error hacia clientes MCP (default: false)
 - INSPYRO_BACKEND_URL:              URL base del backend Inspyro (default: http://127.0.0.1:8000)
-- INSPYRO_BACKEND_WS_URL:           URL WebSocket del backend (default: ws://127.0.0.1:8000/ws)
+- INSPYRO_BACKEND_WS_URL:           URL WebSocket global del backend (default: ws://127.0.0.1:8000/ws)
+- INSPYRO_BACKEND_NOTEBOOK_WS_URL:  URL WebSocket notebook-first (default: ws://127.0.0.1:8000/ws/notebook)
 - INSPYRO_MCP_LOG_LEVEL:            Nivel de logging (default: INFO)
 - INSPYRO_MCP_WS_TIMEOUT:           Timeout para operaciones WS en segundos (default: 60)
 - INSPYRO_MCP_REST_TIMEOUT:         Timeout para operaciones REST en segundos (default: 30)
@@ -49,6 +50,19 @@ MCP_DEFAULT_PROFILE: str = os.environ.get("INSPYRO_MCP_DEFAULT_PROFILE", "author
 # Inspyro backend
 BACKEND_URL: str = os.environ.get("INSPYRO_BACKEND_URL", "http://127.0.0.1:8000")
 BACKEND_WS_URL: str = os.environ.get("INSPYRO_BACKEND_WS_URL", "ws://127.0.0.1:8000/ws")
+
+
+def _default_notebook_ws_url() -> str:
+    explicit = os.environ.get("INSPYRO_BACKEND_NOTEBOOK_WS_URL")
+    if explicit:
+        return explicit
+    stripped = BACKEND_WS_URL.rstrip("/")
+    if stripped.endswith("/ws"):
+        return f"{stripped}/notebook"
+    return BACKEND_WS_URL
+
+
+BACKEND_NOTEBOOK_WS_URL: str = _default_notebook_ws_url()
 
 # Timeouts
 WS_TIMEOUT: int = int(os.environ.get("INSPYRO_MCP_WS_TIMEOUT", "60"))

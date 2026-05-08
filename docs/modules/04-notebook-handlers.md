@@ -4,7 +4,7 @@
 
 > **Ubicación:** `backend/app/routers/notebook.py` (fachada) + `backend/app/routers/notebook_*.py`
 
-> **Última actualización:** 2026-04-28
+> **Última actualización:** 2026-05-08
 
 > **Changelog:** `docs/changelog/04-notebook-handlers.md`
 
@@ -14,11 +14,27 @@
 
 Orquestar el ciclo de vida del notebook en backend: creación/carga/guardado, ejecución de celdas, coordinación DOCX/PDF, operaciones de template acopladas al mismo `kernel_id` y rebind del runtime cuando el shell cambia de Home/tab sin destruir la sesión.
 
-## Celdas DOCX nativas (2026-04-28)
+## Binding JSON de plantilla por notebook (2026-05-08)
 
-- `cell_type="docx"` queda aceptado como tipo nativo Inspyro en notebooks cargados, guardados y ejecutados; se preserva por serialización JSON directa cuando hay tipos custom para evitar que `nbformat.writes()` los degrade a `code`.
-- La normalización backend migra suavemente celdas legacy `code` con señales DOCX detectables (`build_doc`, `doc_reset`, `math_latex`, `doc_finalize`, etc.) hacia `docx`, manteniendo compatibilidad con notebooks existentes.
-- `notebook_execute_cell` acepta `cell_type` aditivo. Las celdas `docx` se ejecutan como Python, mientras `emit_docx` sigue representando el modo documental de la corrida y no reemplaza al tipo de celda.
+- `notebook_create`, `notebook_load`, `notebook_attach_kernel` y `notebook_reset_kernel` exponen `template_binding` aditivo. El binding canónico se persiste dentro del `.ipynb` en `metadata.inspyro.template_binding` y apunta a un JSON portable relativo al directorio del notebook.
+- `handle_notebook_load` aplica automáticamente el JSON vinculado después de crear el kernel y antes de emitir `notebook_loaded`; si el archivo falta o está corrupto, responde `status="missing"`/`"error"` sin bloquear la ejecución sin plantilla.
+- `handle_notebook_create` puede heredar un default opcional de workspace desde `<workspace>/.inspyro/templates/default.inspyro-template.json`, copiándolo como JSON hermano del nuevo notebook cuando el path final `.ipynb` está disponible.
+- Los handlers de template actualizan el JSON vinculado después de ACKs autoritativos (`template_uploaded`, `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created`, `template_format_applied`), manteniendo el paquete portable en sincronía con el template activo del kernel.
+
+## Recarga de plantilla con slots semánticos (2026-05-04)
+
+- `_apply_template_bytes_to_kernel()` reinyecta `semantic_style_slots` junto con `template_path`, `table_style_runtime_defaults` y `builder_required_style_defaults`. La ruta de attach/upload ya no deja al kernel con estilos visuales extraídos pero sin el contrato de slots que consume `docx_builder`.
+- Las mutaciones de template siguen invalidando `notebook_docx_hash` y `notebook_last_docx_b64`; la siguiente exportación recompone el DOCX/PDF desde la plantilla actualizada.
+- El flujo fue validado con un notebook real que genera heading/body/caption/table, comprobando en `word/document.xml` que los párrafos usan `Ttulo1`, `Ttulo2`, `Textoindependiente`, `Descripcin` y que las tablas usan `Tablaconcuadrcula`.
+
+## Celdas DOCX lógicas nbformat-safe (2026-05-06)
+
+- `docx` es ahora un tipo lógico de Inspyro, no un `cell_type` persistido. En disco todo `.ipynb` debe quedar válido para Jupyter: una celda documental se guarda como `cell_type="code"` con `metadata.inspyro.cell_kind="docx"`.
+- `notebook_save`, escritura REST de `.ipynb` y la capa MCP canonicalizan antes de persistir, completan la forma mínima de celdas `code` (`outputs`, `execution_count`) y validan con `nbformat.validate`.
+- La normalización runtime sigue exponiendo `cell_type="docx"` hacia UI/MCP para celdas con metadata documental o notebooks legacy que ya traen `cell_type="docx"`/fuentes DOCX detectables.
+- La detección legacy de fuentes DOCX debe ser token/AST-aware y conservadora: `doc_reset`, `build_doc`, `doc_begin`, `doc_finalize` y constructores/métodos documentales sí promocionan la celda; `pd.DataFrame(...)`, `DataFrame` de pandas y métodos genéricos `.text()`/`.table()` no bastan por sí solos.
+- `doc_finalize()` forma parte del namespace público de `docx_builder`/`math_to_docx` y del preámbulo notebook, incluyendo inyección en `builtins`, para que una celda final de revisión documental ejecute con el mismo runtime que el resto del informe.
+- `notebook_execute_cell` acepta `cell_type` aditivo. Las celdas lógicas `docx` se ejecutan como Python, mientras `emit_docx` sigue representando el modo documental de la corrida y no reemplaza al tipo lógico de celda.
 - Apagar DOCX/PDF en el cliente no debe llamar `notebook_mdoc_clear`; el backend solo limpia `mdoc` ante la acción explícita `notebook_mdoc_clear`/`clear_mdoc`.
 
 ## Shared resource explícito para PDF + Home compacta coherente (2026-04-22)
@@ -185,7 +201,7 @@ Orquestar el ciclo de vida del notebook en backend: creación/carga/guardado, ej
 
 - `execute_code`, `cancel_code_execution`, `reconvert_pdf`, `force_reconvert_pdf`
 
-- `template_upload`, `template_attach`, `template_get`, `template_delete`, `template_update_style`, `template_update_document_defaults`
+- `template_upload`, `template_attach`, `template_get`, `template_delete`, `template_update_style`, `template_update_document_defaults`, `template_update_semantic_slots`
 
 - `template_preview_style`, `template_preview_cancel`, `template_table_preview`, `template_create_style_from_table`, `template_apply_table_format`
 
@@ -224,6 +240,8 @@ Orquestar el ciclo de vida del notebook en backend: creación/carga/guardado, ej
 - `notebook_cell_executed` puede incluir `variables_snapshot_degraded` + `execution_diagnostics` aditivo cuando el snapshot runtime cae en fallback seguro.
 
 - Respuestas notebook/template sincronas reflejan `request_id` en success/error cuando el cliente lo envia.
+
+- `notebook_created`, `notebook_loaded`, `notebook_attached`, `notebook_kernel_reset` y ACKs `template_*` relevantes pueden incluir `template_binding` con estado `none|bound|available|applied|updated|missing|error|inherited`.
 
 - Mensajes de ejecución y PDF usados por MCP incluyen `execution_id` aditivo (`notebook_stream`, `notebook_clear_output`, `notebook_execute_result`, `notebook_display_data`, `notebook_update_display_data`, `notebook_comm_*`, `notebook_docx_update`, `notebook_progress_update`, `notebook_pdf_ready`, `notebook_cell_executed`, `notebook_cell_error`).
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import copy
 import contextlib
 import json
@@ -25,6 +26,13 @@ from ..mirror import (
 )
 from ..runtime import log_info, report_progress, resolve_session_id
 from ..session_state import McpSessionState
+from app.services.notebook_cell_kinds import (
+    canonicalize_notebook_for_persistence,
+    logical_cell_kind,
+    mark_logical_cell_kind,
+    normalize_notebook_for_runtime,
+    validate_persisted_notebook,
+)
 
 logger = logging.getLogger("inspyro.mcp.tools.notebook")
 
@@ -83,10 +91,13 @@ def _now_ts() -> float:
 def _get_bridge(session_id: str | None = None) -> InspyroBridge:
     resolved_session_id = resolve_session_id(session_id)
     try:
-        return InspyroBridge.get(resolved_session_id)
+        return InspyroBridge.get(resolved_session_id, websocket_scope="notebook")
     except TypeError:
         # Legacy tests often monkeypatch InspyroBridge.get with a single-arg classmethod.
-        return InspyroBridge.get()
+        try:
+            return InspyroBridge.get(resolved_session_id)
+        except TypeError:
+            return InspyroBridge.get()
 
 
 def _session_lock_registry(session_id: str | None = None) -> dict[str, asyncio.Lock]:
@@ -330,6 +341,13 @@ def _normalize_notebook_path(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
 
+async def _resolve_notebook_path(bridge: InspyroBridge, path: str) -> str:
+    """Resolve notebook paths the same way MCP file tools resolve workspace paths."""
+    from . import files as file_tools
+
+    return await file_tools._resolve_workspace_path(bridge, path)
+
+
 def _source_to_text(source: Any) -> str:
     if isinstance(source, list):
         parts = [str(part) for part in source]
@@ -368,63 +386,179 @@ def _compact_json_preview(value: Any, limit: int = _DEFAULT_OUTPUT_LIMIT_CHARS) 
     return _truncate_text(serialized, limit)
 
 
-_DOCX_SOURCE_HINTS = (
-    "build_doc(",
-    "doc_begin(",
-    "doc_end(",
-    "doc_reset(",
-    "doc_export(",
-    "doc_help(",
-    ".heading(",
-    ".text(",
-    ".list(",
-    ".code(",
-    ".math(",
-    ".math_latex(",
-    ".create_math_latex_element(",
-    ".equation(",
-    ".table(",
-    ".dataframe(",
-    ".figure(",
-    ".image(",
-    ".caption(",
-    ".reference(",
-    ".link(",
-    ".section(",
-    ".table_of_contents(",
-    ".page_break(",
-    ".metadata(",
-    ".style(",
-    ".header(",
-    ".footer(",
-    "Heading(",
-    "Text(",
-    "List(",
-    "Code(",
-    "Equation(",
-    "EquationLatex(",
-    "Table(",
-    "DataFrame(",
-    "Figure(",
-    "Image(",
-    "Caption(",
-    "Reference(",
-    "Link(",
-    "Section(",
-    "TableOfContents(",
-    "PageBreak(",
-    "Metadata(",
-    "Style(",
-    "Header(",
-    "Footer(",
-)
+_DOCX_MODULE_SUFFIXES = ("librerias_propias.math_to_docx", "librerias_propias.docx_builder", "docx_builder")
+_DOCX_DIRECT_CALLS = {
+    "build_doc",
+    "doc_begin",
+    "doc_block",
+    "doc_end",
+    "doc_reset",
+    "doc_export",
+    "doc_export_provenance",
+    "doc_finalize",
+}
+_DOCX_CONSTRUCTOR_CALLS = {
+    "Heading",
+    "Text",
+    "List",
+    "Code",
+    "Link",
+    "Equation",
+    "EquationLatex",
+    "Reference",
+    "Image",
+    "Figure",
+    "Caption",
+    "Table",
+    "DataFrame",
+    "Section",
+    "TableOfContents",
+    "PageBreak",
+    "Metadata",
+    "Style",
+    "Header",
+    "Footer",
+}
+_DOCX_IMPLICIT_CONSTRUCTOR_CALLS = _DOCX_CONSTRUCTOR_CALLS - {"DataFrame"}
+_DOCX_BUILDER_METHODS = {
+    "heading",
+    "text",
+    "list",
+    "code",
+    "math",
+    "math_latex",
+    "create_math_latex_element",
+    "equation",
+    "table",
+    "dataframe",
+    "figure",
+    "image",
+    "caption",
+    "reference",
+    "link",
+    "section",
+    "table_of_contents",
+    "page_break",
+    "metadata",
+    "style",
+    "header",
+    "footer",
+}
 _INSPYRO_CELL_TYPES = {"code", "markdown", "docx"}
 _RUNNABLE_CELL_TYPES = {"code", "docx"}
 
 
+def _attribute_parts(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        return [*_attribute_parts(node.value), node.attr]
+    return []
+
+
+def _module_matches_docx(module_name: str) -> bool:
+    normalized = str(module_name or "").strip()
+    return normalized in _DOCX_MODULE_SUFFIXES or normalized.endswith(".math_to_docx") or normalized.endswith(".docx_builder")
+
+
+class _DocxSourceDetector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.found = False
+        self.docx_direct_aliases = set(_DOCX_DIRECT_CALLS)
+        self.docx_constructor_aliases = set(_DOCX_IMPLICIT_CONSTRUCTOR_CALLS)
+        self.docx_module_aliases: set[str] = set()
+        self.builder_vars: set[str] = set()
+
+    def visit_Import(self, node: ast.Import) -> Any:
+        for alias in node.names:
+            if _module_matches_docx(alias.name):
+                self.docx_module_aliases.add(alias.asname or alias.name.split(".")[0])
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> Any:
+        if _module_matches_docx(node.module or ""):
+            for alias in node.names:
+                exported_name = alias.name
+                local_name = alias.asname or exported_name
+                if exported_name in _DOCX_DIRECT_CALLS:
+                    self.docx_direct_aliases.add(local_name)
+                if exported_name in _DOCX_CONSTRUCTOR_CALLS:
+                    self.docx_constructor_aliases.add(local_name)
+        self.generic_visit(node)
+
+    def visit_With(self, node: ast.With) -> Any:
+        for item in node.items:
+            if self._is_docx_factory_call(item.context_expr) and isinstance(item.optional_vars, ast.Name):
+                self.builder_vars.add(item.optional_vars.id)
+        self.generic_visit(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> Any:
+        self.visit_With(node)  # type: ignore[arg-type]
+
+    def visit_Assign(self, node: ast.Assign) -> Any:
+        if self._is_docx_factory_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.builder_vars.add(target.id)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> Any:
+        if node.value is not None and self._is_docx_factory_call(node.value) and isinstance(node.target, ast.Name):
+            self.builder_vars.add(node.target.id)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> Any:
+        if self._is_docx_call(node.func):
+            self.found = True
+            return
+        self.generic_visit(node)
+
+    def _is_docx_factory_call(self, node: ast.AST) -> bool:
+        return isinstance(node, ast.Call) and self._call_name(node.func) in {"build_doc", "doc_begin", "doc_block"}
+
+    def _call_name(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            if node.id in self.docx_direct_aliases:
+                return node.id
+            return node.id if node.id in _DOCX_DIRECT_CALLS else None
+        if isinstance(node, ast.Attribute):
+            parts = _attribute_parts(node)
+            if len(parts) >= 2 and parts[0] in self.docx_module_aliases:
+                return parts[-1]
+            if len(parts) >= 3 and ".".join(parts[:-1]).endswith(_DOCX_MODULE_SUFFIXES):
+                return parts[-1]
+        return None
+
+    def _is_docx_call(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in self.docx_direct_aliases or node.id in self.docx_constructor_aliases
+        if isinstance(node, ast.Attribute):
+            parts = _attribute_parts(node)
+            if not parts:
+                return False
+            if len(parts) >= 2 and parts[0] in self.docx_module_aliases:
+                return parts[-1] in _DOCX_DIRECT_CALLS or parts[-1] in _DOCX_CONSTRUCTOR_CALLS
+            if len(parts) >= 2 and parts[0] in self.builder_vars:
+                return parts[-1] in _DOCX_BUILDER_METHODS
+            if len(parts) >= 3 and ".".join(parts[:-1]).endswith(_DOCX_MODULE_SUFFIXES):
+                return parts[-1] in _DOCX_DIRECT_CALLS or parts[-1] in _DOCX_CONSTRUCTOR_CALLS
+        return False
+
+
+def _should_emit_docx_fallback(source_text: str) -> bool:
+    high_confidence_names = "|".join(sorted(_DOCX_DIRECT_CALLS | _DOCX_IMPLICIT_CONSTRUCTOR_CALLS))
+    return bool(re.search(rf"(?<![\w.])(?:{high_confidence_names})\s*\(", source_text))
+
+
 def _should_emit_docx(source: str) -> bool:
     source_text = _source_to_text(source)
-    return any(hint in source_text for hint in _DOCX_SOURCE_HINTS)
+    try:
+        tree = ast.parse(source_text)
+    except SyntaxError:
+        return _should_emit_docx_fallback(source_text)
+    detector = _DocxSourceDetector()
+    detector.visit(tree)
+    return detector.found
 
 
 def _normalize_cell_type(raw_cell_type: Any) -> str:
@@ -432,27 +566,25 @@ def _normalize_cell_type(raw_cell_type: Any) -> str:
     return cell_type if cell_type in _INSPYRO_CELL_TYPES else "code"
 
 
+def _logical_cell_type(cell: dict[str, Any]) -> str:
+    logical_type = logical_cell_kind(cell, source_detector=lambda source: _should_emit_docx(_source_to_text(source)))
+    return logical_type if logical_type in _INSPYRO_CELL_TYPES else "code"
+
+
 def _is_docx_cell(cell: dict[str, Any]) -> bool:
-    return _normalize_cell_type(cell.get("cell_type")) == "docx"
+    return _logical_cell_type(cell) == "docx"
 
 
 def _is_runnable_cell(cell: dict[str, Any], *, include_docx: bool = True) -> bool:
-    cell_type = _normalize_cell_type(cell.get("cell_type"))
+    cell_type = _logical_cell_type(cell)
     return cell_type == "code" or (include_docx and cell_type == "docx")
 
 
 def _normalize_notebook_cell_types(notebook_payload: dict[str, Any]) -> dict[str, Any]:
-    cells = notebook_payload.get("cells")
-    if not isinstance(cells, list):
-        return notebook_payload
-    for cell in cells:
-        if not isinstance(cell, dict):
-            continue
-        cell_type = _normalize_cell_type(cell.get("cell_type"))
-        if cell_type == "code" and _should_emit_docx(_source_to_text(cell.get("source", ""))):
-            cell_type = "docx"
-        cell["cell_type"] = cell_type
-    return notebook_payload
+    return normalize_notebook_for_runtime(
+        notebook_payload,
+        source_detector=lambda source: _should_emit_docx(_source_to_text(source)),
+    )
 
 
 def _summarize_notebook_output(output: dict[str, Any], limit: int = _DEFAULT_OUTPUT_LIMIT_CHARS) -> dict[str, Any]:
@@ -588,7 +720,7 @@ def _serialize_cell(
     outputs = list(cell.get("outputs") or [])
     payload = {
         "id": cell.get("id"),
-        "type": cell.get("cell_type", "code"),
+        "type": _logical_cell_type(cell),
         "order": order,
         "source_len": len(source_text),
         "has_outputs": bool(outputs),
@@ -834,7 +966,7 @@ def _build_execution_error(raw_message: dict[str, Any], *, operation: str) -> di
 
 async def _read_notebook(bridge: InspyroBridge, path: str) -> dict[str, Any]:
     """Lee y parsea un notebook .ipynb desde el filesystem."""
-    normalized_path = _normalize_notebook_path(path)
+    normalized_path = await _resolve_notebook_path(bridge, path)
     result = await bridge.rest_get("/api/files/read", params={"path": normalized_path})
     content = result.get("content")
     if isinstance(content, dict):
@@ -875,10 +1007,25 @@ async def _read_notebook(bridge: InspyroBridge, path: str) -> dict[str, Any]:
 
 async def _write_notebook(bridge: InspyroBridge, path: str, notebook: dict[str, Any]) -> None:
     """Escribe un notebook .ipynb al filesystem."""
-    normalized_path = _normalize_notebook_path(path)
+    normalized_path = await _resolve_notebook_path(bridge, path)
+    persisted_notebook = canonicalize_notebook_for_persistence(
+        notebook,
+        source_detector=lambda source: _should_emit_docx(_source_to_text(source)),
+    )
+    try:
+        validate_persisted_notebook(persisted_notebook)
+    except Exception as exc:
+        _raise_typed_error(
+            "INVALID_PERSISTED_NOTEBOOK",
+            f"Notebook persistido invalido despues de normalizar celdas: {normalized_path}",
+            cause=str(exc),
+            retryable=False,
+            notebook_path=normalized_path,
+            operation="write_notebook",
+        )
     await bridge.rest_post(
         "/api/files/write",
-        json_data={"path": normalized_path, "content": notebook},
+        json_data={"path": normalized_path, "content": persisted_notebook},
     )
 
 
@@ -964,10 +1111,8 @@ def _ensure_notebook_cell_ids(notebook_payload: dict[str, Any]) -> None:
                     break
             cell["id"] = cell_id
         seen_ids.add(cell_id)
-        cell_type = _normalize_cell_type(cell.get("cell_type"))
-        if cell_type == "code" and _should_emit_docx(_source_to_text(cell.get("source", ""))):
-            cell_type = "docx"
-        cell["cell_type"] = cell_type
+        cell_type = _logical_cell_type(cell)
+        mark_logical_cell_kind(cell, cell_type, persistable=False)
         metadata = cell.get("metadata")
         if isinstance(metadata, dict):
             metadata.setdefault("inspyro_id", cell_id)
@@ -975,7 +1120,7 @@ def _ensure_notebook_cell_ids(notebook_payload: dict[str, Any]) -> None:
 
 def _strip_code_cell_runtime_state(cell: dict[str, Any]) -> dict[str, Any]:
     stripped = copy.deepcopy(cell)
-    if _normalize_cell_type(stripped.get("cell_type")) not in _RUNNABLE_CELL_TYPES:
+    if _logical_cell_type(stripped) not in _RUNNABLE_CELL_TYPES:
         return stripped
 
     stripped["outputs"] = []
@@ -1011,6 +1156,7 @@ def _build_new_cell(cell_id: str, *, cell_type: str, source: str) -> dict[str, A
         "source": source,
         "metadata": {"inspyro_id": cell_id},
     }
+    mark_logical_cell_kind(payload, cell_type, persistable=False)
     if cell_type in _RUNNABLE_CELL_TYPES:
         payload["outputs"] = []
         payload["execution_count"] = None
@@ -1050,9 +1196,9 @@ def _prepare_synced_cells(
         if requested_id and requested_id in existing_by_id:
             existing_cell = existing_by_id[requested_id]
             updated_cell = copy.deepcopy(existing_cell)
-            previous_type = _normalize_cell_type(existing_cell.get("cell_type") or "code")
+            previous_type = _logical_cell_type(existing_cell)
             previous_source = _source_to_text(existing_cell.get("source", ""))
-            updated_cell["cell_type"] = requested["cell_type"]
+            mark_logical_cell_kind(updated_cell, requested["cell_type"], persistable=False)
             updated_cell["source"] = requested["source"]
             metadata = updated_cell.get("metadata")
             if isinstance(metadata, dict):
@@ -1189,12 +1335,17 @@ async def _resolve_cell_source(
 
     notebook_path = _SESSION_STATE.get_notebook_path(kernel_id, session_id=resolve_session_id(session_id))
     if not notebook_path:
+        resolved_session_id = resolve_session_id(session_id)
         _raise_typed_error(
             "CELL_SOURCE_REQUIRED",
             "No hay notebook registrado para este kernel y no se proporciono `source`.",
             kernel_id=kernel_id,
             cell_id=cell_id,
             operation="execute_cell",
+            extra={
+                "session_id": resolved_session_id,
+                "known_notebooks": _SESSION_STATE.list_notebook_sessions(session_id=resolved_session_id),
+            },
         )
 
     notebook_payload = await _read_notebook(bridge, notebook_path)
@@ -1215,7 +1366,7 @@ async def _resolve_cell_source_and_type(
     if notebook_path:
         notebook_payload = await _read_notebook(bridge, notebook_path)
         _, cell = _find_cell(notebook_payload.get("cells", []), cell_id)
-        cell_type = _normalize_cell_type(cell.get("cell_type"))
+        cell_type = _logical_cell_type(cell)
         source_text = _source_to_text(source) if source is not None else _source_to_text(cell.get("source", ""))
         if cell_type == "code" and _should_emit_docx(source_text):
             cell_type = "docx"
@@ -1227,6 +1378,10 @@ async def _resolve_cell_source_and_type(
             kernel_id=kernel_id,
             cell_id=cell_id,
             operation="execute_cell",
+            extra={
+                "session_id": resolved_session_id,
+                "known_notebooks": _SESSION_STATE.list_notebook_sessions(session_id=resolved_session_id),
+            },
         )
     source_text = _source_to_text(source)
     return source_text, ("docx" if _should_emit_docx(source_text) else "code")
@@ -1546,7 +1701,7 @@ def _select_code_cells(
     max_cells: int | None = None,
     include_docx: bool = True,
 ) -> list[dict[str, Any]]:
-    code_cells = [cell for cell in cells if _normalize_cell_type(cell.get("cell_type")) in _RUNNABLE_CELL_TYPES]
+    code_cells = [cell for cell in cells if _logical_cell_type(cell) in _RUNNABLE_CELL_TYPES]
 
     if until_cell_id:
         selected: list[dict[str, Any]] = []
@@ -1946,7 +2101,7 @@ async def _resolve_workdir(
     notebook_path: str | None = None,
 ) -> str:
     if notebook_path:
-        expanded = _normalize_notebook_path(notebook_path)
+        expanded = await _resolve_notebook_path(bridge, notebook_path)
         if expanded.lower().endswith(".ipynb"):
             return os.path.dirname(expanded)
         return expanded
@@ -2083,15 +2238,18 @@ async def _run_batch_execution(
     )
 
     try:
-        batch_emit_docx = any(
-            _is_docx_cell(cell) or _should_emit_docx(_source_to_text(cell.get("source", "")))
+        docx_selected_ids = [
+            str(cell.get("id") or "")
             for cell in selected_cells
-        )
-        last_runnable_cell_id = selected_ids[-1] if selected_ids else ""
+            if _is_docx_cell(cell) or _should_emit_docx(_source_to_text(cell.get("source", "")))
+        ]
+        batch_emit_docx = bool(docx_selected_ids)
+        last_docx_cell_id = docx_selected_ids[-1] if docx_selected_ids else ""
 
         for order, cell in enumerate(selected_cells):
             cell_id = str(cell.get("id") or "unknown")
             source_text = _source_to_text(cell.get("source", ""))
+            cell_emit_docx = _is_docx_cell(cell) or _should_emit_docx(source_text)
             cell_started_perf = time.perf_counter()
             child_execution_id = f"mcp_exec_{uuid.uuid4().hex}"
 
@@ -2140,9 +2298,9 @@ async def _run_batch_execution(
                     timeout=timeout_per_cell,
                     emit_open=False,
                     emit_snapshot_before_runtime=False,
-                    emit_docx=batch_emit_docx,
-                    cell_type=_normalize_cell_type(cell.get("cell_type")),
-                    skip_pdf=bool(last_runnable_cell_id) and cell_id != last_runnable_cell_id,
+                    emit_docx=cell_emit_docx,
+                    cell_type=_logical_cell_type(cell),
+                    skip_pdf=bool(last_docx_cell_id) and cell_id != last_docx_cell_id,
                     execution_id_override=child_execution_id,
                     artifact_alias_execution_id=execution_id,
                     session_id=resolved_session_id,
@@ -2532,7 +2690,7 @@ async def notebook_create(
     """
     session_id = _ensure_stateful_notebook_sessions("notebook_create", notebook_path=path)
     bridge = _get_bridge(session_id)
-    notebook_dir = _normalize_notebook_path(path)
+    notebook_dir = await _resolve_notebook_path(bridge, path)
     notebook_path = _normalize_notebook_path(os.path.join(notebook_dir, name))
     existing_kernel_id = _SESSION_STATE.get_kernel_id(notebook_path, session_id=session_id) if reuse_if_loaded else None
     existing_status = (
@@ -2549,7 +2707,7 @@ async def notebook_create(
     else:
         result = await bridge.ws_request(
             "notebook_create",
-            {"path": notebook_dir},
+            {"path": notebook_path, "cwd": notebook_dir},
             success_types={"notebook_created"},
             error_types={"notebook_error"},
             timeout=15,
@@ -2582,6 +2740,7 @@ async def notebook_create(
         "kernel_session": "reused" if reused_kernel else "created",
         "reused_kernel": reused_kernel,
         "closed_kernel_ids": closed_kernel_ids,
+        "template_binding": result.get("template_binding"),
         "cells": _cell_listing(
             cells,
             include_source_preview=include_source_preview,
@@ -2615,7 +2774,7 @@ async def notebook_load(
     """
     session_id = _ensure_stateful_notebook_sessions("notebook_load", notebook_path=path)
     bridge = _get_bridge(session_id)
-    notebook_path = _normalize_notebook_path(path)
+    notebook_path = await _resolve_notebook_path(bridge, path)
     notebook_payload = await _read_notebook(bridge, notebook_path)
     kernel_load_payload = _strip_notebook_runtime_state(notebook_payload)
     existing_kernel_id = _SESSION_STATE.get_kernel_id(notebook_path, session_id=session_id) if reuse_if_loaded else None
@@ -2659,6 +2818,7 @@ async def notebook_load(
         "kernel_session": "reused" if reused_kernel else "created",
         "reused_kernel": reused_kernel,
         "closed_kernel_ids": closed_kernel_ids,
+        "template_binding": result.get("template_binding"),
         "cells": _cell_listing(
             cells,
             include_source_preview=include_source_preview,
@@ -2697,8 +2857,9 @@ async def notebook_sync_cells(
     y devuelve el listado final lightweight del notebook.
     Siguiente tool tipica: `execute_cell`, `execute_all_cells` o `notebook_save`.
     """
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("notebook_sync_cells", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     sync_summary = _prepare_synced_cells(
         notebook_payload,
@@ -2708,7 +2869,7 @@ async def notebook_sync_cells(
     notebook_payload["cells"] = sync_summary["cells"]
     await _write_notebook(bridge, normalized_path, notebook_payload)
 
-    kernel_id = _resolve_registered_kernel_id(normalized_path)
+    kernel_id = _resolve_registered_kernel_id(normalized_path, session_id=session_id)
     resource = _build_notebook_resource(
         notebook_path=normalized_path,
         kernel_id=kernel_id,
@@ -2758,12 +2919,12 @@ async def create_kernel(notebook_path: Optional[str] = None) -> dict:
             retryable=True,
             operation="create_kernel",
         )
-    _SESSION_STATE.register_kernel(kernel_id, notebook_path=notebook_path, state="idle")
+    _SESSION_STATE.register_kernel(kernel_id, notebook_path=notebook_path, state="idle", session_id=session_id)
     return {
         "status": "created",
         "kernel_id": kernel_id,
         "cwd": workdir,
-        "notebook_path": _normalize_notebook_path(notebook_path) if notebook_path else None,
+        "notebook_path": await _resolve_notebook_path(bridge, notebook_path) if notebook_path else None,
         "kernel_session": "created",
         "reused_kernel": False,
     }
@@ -2781,11 +2942,12 @@ async def attach_kernel(kernel_id: str, notebook_path: str) -> dict:
         kernel_id=kernel_id,
         notebook_path=notebook_path,
     )
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = resolve_session_id()
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
-    _SESSION_STATE.register_notebook(kernel_id, normalized_path)
-    _SESSION_STATE.set_kernel_state(kernel_id, "idle", notebook_path=normalized_path)
+    _SESSION_STATE.register_notebook(kernel_id, normalized_path, session_id=session_id)
+    _SESSION_STATE.set_kernel_state(kernel_id, "idle", notebook_path=normalized_path, session_id=session_id)
     await emit_open_resource(normalized_path, focus_view="notebook")
     await emit_notebook_snapshot(normalized_path, notebook_payload, kernel_id=kernel_id)
     return {
@@ -2809,15 +2971,16 @@ async def list_cells(
     max_cells: Optional[int] = None,
 ) -> dict:
     """Cuando usar: inspeccionar celdas de un notebook sin cargar source completo."""
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("list_cells", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     cells = notebook_payload.get("cells", [])
     filtered: list[dict[str, Any]] = []
     pattern_lower = pattern.lower() if pattern else None
 
     for index, cell in enumerate(cells):
-        cell_type = str(cell.get("cell_type") or "code")
+        cell_type = _logical_cell_type(cell)
         if type and cell_type != type:
             continue
         if executed_only and cell.get("execution_count") is None:
@@ -2856,8 +3019,9 @@ async def get_cell(
     output_limit_chars: int = _DEFAULT_OUTPUT_LIMIT_CHARS,
 ) -> dict:
     """Cuando usar: recuperar una celda puntual con source/outputs bajo demanda."""
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("get_cell", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     index, cell = _find_cell(notebook_payload.get("cells", []), cell_id)
     return {
@@ -2882,8 +3046,9 @@ async def find_in_notebook(
     case_sensitive: bool = False,
 ) -> dict:
     """Cuando usar: buscar texto o regex dentro de un notebook."""
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("find_in_notebook", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     cells = notebook_payload.get("cells", [])
     matches: list[dict[str, Any]] = []
@@ -2917,7 +3082,7 @@ async def find_in_notebook(
         matches.append(
             {
                 "cell_id": cell.get("id"),
-                "type": cell.get("cell_type", "code"),
+                "type": _logical_cell_type(cell),
                 "order": index,
                 "match_count": len(found),
                 "source_preview": _source_preview(source_text),
@@ -2937,13 +3102,24 @@ async def find_in_notebook(
 
 async def kernel_status(kernel_id: str, *, session_id: str | None = None) -> dict:
     """Cuando usar: consultar el estado local del kernel MCP asociado a notebooks."""
-    status = _SESSION_STATE.get_kernel_status(kernel_id, session_id=resolve_session_id(session_id))
+    resolved_session_id = resolve_session_id(session_id)
+    status = _SESSION_STATE.get_kernel_status(kernel_id, session_id=resolved_session_id)
+    bridge_info: dict[str, Any] = {}
+    try:
+        bridge_info = _get_bridge(resolved_session_id).connection_info()
+    except Exception:
+        bridge_info = {}
+    notebook_path = status.get("notebook_path")
     return {
         "status": "ok",
         "kernel_id": status.get("kernel_id") or kernel_id,
         "state": status.get("state", "disconnected"),
         "active": bool(status.get("active", False)),
-        "path": status.get("notebook_path"),
+        "path": notebook_path,
+        "session_id": resolved_session_id,
+        "source_resolution_ok": bool(notebook_path),
+        "known_notebook_count": len(_SESSION_STATE.list_notebook_sessions(session_id=resolved_session_id)),
+        "bridge": bridge_info,
         "updated_at": status.get("updated_at"),
         "created_at": status.get("created_at"),
         "last_execution_id": status.get("last_execution_id"),
@@ -3072,7 +3248,7 @@ async def cancel_run(run_id: str) -> dict:
         )
 
     target_execution_id = str(execution.get("current_child_execution_id") or run_id).strip() or run_id
-    bridge = InspyroBridge.get()
+    bridge = _get_bridge(session_id)
     cancellation_raw = await bridge.ws_request(
         "notebook_cancel_execution",
         {
@@ -3204,7 +3380,7 @@ async def notebook_save(kernel_id: str, path: Optional[str] = None) -> dict:
             operation="notebook_save",
         )
 
-    target_path = _normalize_notebook_path(path or source_path)
+    target_path = await _resolve_notebook_path(bridge, path or source_path)
     notebook_payload = await _read_notebook(bridge, source_path)
     if target_path != source_path:
         await _write_notebook(bridge, target_path, notebook_payload)
@@ -3549,7 +3725,7 @@ async def execute_all_cells(
         notebook_path=notebook_path,
     )
     bridge = _get_bridge(session_id)
-    normalized_path = _normalize_notebook_path(notebook_path)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     _SESSION_STATE.register_notebook(kernel_id, normalized_path, session_id=session_id)
     await emit_open_resource(
@@ -3674,7 +3850,7 @@ async def execute_cells(
         notebook_path=notebook_path,
     )
     bridge = _get_bridge(session_id)
-    normalized_path = _normalize_notebook_path(notebook_path)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     _SESSION_STATE.register_notebook(kernel_id, normalized_path, session_id=session_id)
     await emit_open_resource(
@@ -3787,7 +3963,7 @@ async def execute_until(
         notebook_path=notebook_path,
     )
     bridge = _get_bridge(session_id)
-    normalized_path = _normalize_notebook_path(notebook_path)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     _SESSION_STATE.register_notebook(kernel_id, normalized_path, session_id=session_id)
     await emit_open_resource(
@@ -3888,8 +4064,9 @@ async def add_cell(
     Resultado: devuelve `cell_id`, posicion resuelta y total de celdas.
     Siguiente tool tipica: `edit_cell`, `move_cell` o `execute_cell`.
     """
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("add_cell", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
 
     cell_id = str(uuid.uuid4())[:8]
@@ -3900,6 +4077,7 @@ async def add_cell(
         "source": _source_to_text(source),
         "metadata": {},
     }
+    mark_logical_cell_kind(new_cell, resolved_cell_type, persistable=False)
     if resolved_cell_type in _RUNNABLE_CELL_TYPES:
         new_cell["outputs"] = []
         new_cell["execution_count"] = None
@@ -3945,8 +4123,9 @@ async def delete_cell(notebook_path: str, cell_id: str) -> dict:
     Resultado: devuelve confirmacion, `cell_id` eliminado y nuevo total de celdas.
     Siguiente tool tipica: `add_cell`, `notebook_save` o `execute_all_cells`.
     """
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("delete_cell", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
 
     cells = notebook_payload.get("cells", [])
@@ -3954,7 +4133,7 @@ async def delete_cell(notebook_path: str, cell_id: str) -> dict:
     notebook_payload["cells"] = [cell for cell in cells if cell.get("id") != cell_id]
 
     await _write_notebook(bridge, normalized_path, notebook_payload)
-    kernel_id = _resolve_registered_kernel_id(normalized_path)
+    kernel_id = _resolve_registered_kernel_id(normalized_path, session_id=session_id)
     resource = _build_notebook_resource(
         notebook_path=normalized_path,
         kernel_id=kernel_id,
@@ -3987,14 +4166,15 @@ async def edit_cell(notebook_path: str, cell_id: str, source: str) -> dict:
     Resultado: devuelve confirmacion y conserva el notebook listo para ejecutar.
     Siguiente tool tipica: `execute_cell`, `execute_all_cells` o `notebook_save`.
     """
-    bridge = InspyroBridge.get()
-    normalized_path = _normalize_notebook_path(notebook_path)
+    session_id = _ensure_stateful_notebook_sessions("edit_cell", notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
 
     _, cell = _find_cell(notebook_payload.get("cells", []), cell_id)
     cell["source"] = _source_to_text(source)
     await _write_notebook(bridge, normalized_path, notebook_payload)
-    kernel_id = _resolve_registered_kernel_id(normalized_path)
+    kernel_id = _resolve_registered_kernel_id(normalized_path, session_id=session_id)
     resource = _build_notebook_resource(
         notebook_path=normalized_path,
         kernel_id=kernel_id,
@@ -4023,8 +4203,9 @@ async def move_cell(
     Resultado: devuelve posicion previa/nueva y deja el orden persistido y reflejado en runtime.
     Siguiente tool tipica: `execute_all_cells` o `notebook_save`.
     """
-    bridge = InspyroBridge.get()
-    resolved_path = notebook_path or _SESSION_STATE.get_notebook_path(kernel_id)
+    session_id = _ensure_stateful_notebook_sessions("move_cell", kernel_id=kernel_id, notebook_path=notebook_path)
+    bridge = _get_bridge(session_id)
+    resolved_path = notebook_path or _SESSION_STATE.get_notebook_path(kernel_id, session_id=session_id)
     if not resolved_path:
         _raise_typed_error(
             "MISSING_NOTEBOOK_SESSION",
@@ -4033,7 +4214,7 @@ async def move_cell(
             operation="move_cell",
         )
 
-    normalized_path = _normalize_notebook_path(resolved_path)
+    normalized_path = await _resolve_notebook_path(bridge, resolved_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     cells = notebook_payload.get("cells", [])
     current_index, cell = _find_cell(cells, cell_id)
@@ -4082,8 +4263,10 @@ async def _hard_reset_kernel_session(
     *,
     kernel_id: str,
     notebook_path: str,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
-    normalized_path = _normalize_notebook_path(notebook_path)
+    resolved_session_id = resolve_session_id(session_id)
+    normalized_path = await _resolve_notebook_path(bridge, notebook_path)
     notebook_payload = await _read_notebook(bridge, normalized_path)
     kernel_load_payload = _strip_notebook_runtime_state(notebook_payload)
     load_requests = [
@@ -4137,10 +4320,10 @@ async def _hard_reset_kernel_session(
             retryable=True,
         )
     if new_kernel_id != kernel_id:
-        _SESSION_STATE.unregister_kernel(kernel_id)
-        _drop_kernel_execution_lock(kernel_id)
-    _SESSION_STATE.register_notebook(new_kernel_id, normalized_path)
-    _SESSION_STATE.set_kernel_state(new_kernel_id, "idle", notebook_path=normalized_path)
+        _SESSION_STATE.unregister_kernel(kernel_id, session_id=resolved_session_id)
+        _drop_kernel_execution_lock(kernel_id, session_id=resolved_session_id)
+    _SESSION_STATE.register_notebook(new_kernel_id, normalized_path, session_id=resolved_session_id)
+    _SESSION_STATE.set_kernel_state(new_kernel_id, "idle", notebook_path=normalized_path, session_id=resolved_session_id)
     loaded_notebook = result.get("notebook") or kernel_load_payload
     await emit_open_resource(
         normalized_path,
@@ -4218,6 +4401,7 @@ async def reset_kernel(kernel_id: str, hard: bool = False) -> dict:
             bridge,
             kernel_id=kernel_id,
             notebook_path=notebook_path,
+            session_id=session_id,
         )
 
     try:
@@ -4234,6 +4418,7 @@ async def reset_kernel(kernel_id: str, hard: bool = False) -> dict:
                 bridge,
                 kernel_id=kernel_id,
                 notebook_path=notebook_path,
+                session_id=session_id,
             )
         error_payload = _error_from_exception(
             exc,

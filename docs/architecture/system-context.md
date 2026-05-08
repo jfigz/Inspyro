@@ -1,6 +1,6 @@
 ﻿# Contexto del Sistema Inspyro (LLM-First)
 
-> **Última actualización:** 2026-05-03
+> **Última actualización:** 2026-05-08
 > **Objetivo:** entregar a agentes IA una vista global mínima y precisa del sistema completo.
 
 ---
@@ -37,14 +37,14 @@
 | Desktop | `desktop/main.js` + `preload.js` | Ventana Electron, splash, menú nativo, single-instance, sidecar backend, preload seguro, persistencia de recents/bounds, máquina de estados del renderer y navegación externa | Lifecycle del shell + backend child process + shell-state local |
 | Frontend | `App.js` | Layout principal, wiring WS/REST, estado global de paneles, bridge desktop-aware, branding visible del header desde los PNG canónicos y variantes contextuales de `assets/brand/`, arbitraje de notificaciones nativas y gobierno del espejo MCP | Estado UI global + sesiones notebook/code por path + template/document state notebook-scoped + integración del shell desktop |
 | Frontend | `NotebookEditor.js` + `notebook/` | Superficie visible del notebook activo, ejecución de celdas, outputs y parseo de mensajes notebook | Estado notebook visible + runtime por celda; lifecycle persistente del kernel delegado al shell |
-| Frontend | `TemplateEditor.js` | Edición de estilos de plantilla y previews | Estado template del notebook activo; ownership persistente en `App.js` por `path` |
+| Frontend | `TemplateEditor.js` | Edición de estilos de plantilla, modo Word completo y previews | Estado template del notebook activo; ownership persistente en `App.js` por `path`, latch de attach por token/path y drafts locales hasta ACK |
 | Backend | `main.py` | Dispatcher WS con priorización de control, colas inbound acotadas por conexión y workers por tipo de carga, endpoints REST de salud/sistema y serving same-origin del frontend compilado en modo desktop | Mapa de contratos de entrada + lifecycle de colas/tareas inbound WS por conexión (`/ws` shell global, `/ws/notebook` por notebook) + serving SPA |
 | Backend | `services/websocket_manager.py` | Registro/desregistro de conexiones, sanitización JSON-safe, cola saliente FIFO por conexión, writer task único y política `Protect notebooks` ante saturación del transporte compartido | Conexiones activas + `_ConnectionState` por socket (`queue`, `writer_task`, `closing`) + managers separados para shell global y sockets notebook dedicados |
 | Backend | `routers/notebook.py` + `routers/notebook_*.py` | Fachada + handlers separados de ejecución/control/template | Orquestación de mensajes notebook/template |
 | Backend | `services/jupyter_kernel.py` | Sesiones kernel, serialización de ejecución por lock y callbacks IOPub desacoplados que drenan sobre el transporte WS serializado de `02-websocket-manager` | Estado kernel por `kernel_id` + backlog acotado de callbacks |
 | Backend | `services/lsp_bridge.py` | Proceso `pylsp`, bridge WS<->stdio y forwarding JSON-RPC | Estado efímero por conexión LSP + lifecycle del subprocess |
 | Backend | `services/workspace_service.py` | Workspace activo y raíz de estado interno escribible de la app | Workspace activo + app-state dir |
-| Backend | `services/template/` + `services/template_service.py` | Dominio template modular + fachada de compatibilidad legacy | Estado de plantilla en disco por kernel |
+| Backend | `services/template/` + `services/template_service.py` | Dominio template modular + fachada de compatibilidad legacy | Estado de plantilla en disco por kernel + cola serial de preview Word nativo |
 | Backend | `services/pdf_converter.py` | Conversión y caché PDF; caché protegido con `threading.Lock`, cola async explícita del camino Word-capable y executors dedicados para no bloquear el pool compartido mientras un notebook espera convertidor | Estado de conversión/caché + cola async del convertidor |
 | Backend | `services/runtime_metrics.py` | Métricas de saturación/latencia WS, cola saliente compartida por conexión y contención de locks | Estado agregado de observabilidad runtime |
 | Backend | `backend/mcp_server/*` | Adaptador MCP local, discoverability AI-first, bridge REST/WS, resources/prompts y relay de actividad/espejo | Estado MCP session-scoped por `session_id` (bridge, notebooks, artefactos, ejecuciones, roots/perfil) |
@@ -64,7 +64,7 @@
 
 3. **Estado notebook/code frontend por archivo**
 - Owner: `App.js` + `useFileSystem.js` + `NotebookEditor.js` + `useAppWebSocket.js`.
-- Modelo: `useFileSystem` cachea drafts persistibles por `path`; `App.js` conserva sesiones notebook por tab (`kernel_id`, `runtimeNotebook`, `runtimeVersion`, `editorHydrationToken`, estado kernel, batch `Run All`, estado documental, `templateInfo`, `templateBlob`, `templateOpenRequest`, `lastTemplateAttach`) y estado de ejecución `.py` por archivo (`run_id`, output, documento). `NotebookEditor` monta solo la vista activa, trata `initialKernelId` como runtime vivo y consume mensajes notebook visibles ya ruteados por el shell en vez de re-resolverlos por su cuenta.
+- Modelo: `useFileSystem` cachea drafts persistibles por `path`; `App.js` conserva sesiones notebook por tab (`kernel_id`, `runtimeNotebook`, `runtimeVersion`, `editorHydrationToken`, estado kernel, batch `Run All`, estado documental, `templateInfo`, `templateBlob`, `templateBinding`, `templateOpenRequest`, `lastTemplateAttach`) y estado de ejecución `.py` por archivo (`run_id`, output, documento). `NotebookEditor` monta solo la vista activa, trata `initialKernelId` como runtime vivo y consume mensajes notebook visibles ya ruteados por el shell en vez de re-resolverlos por su cuenta.
 - Al volver desde `home` o al reabrir una tab notebook dentro de la misma sesión renderer/WS, el shell reutiliza la sesión local sin mandar attach automático y sigue aplicando mensajes `notebook_*` aunque el editor esté desmontado, de modo que `Run All` y los outputs continúan en background.
 - `documentPipelineStatus` es notebook-scoped: permanece asociado a la sesión aunque la libreta quede oculta o el usuario vuelva a `home`, y solo se limpia en terminales documentales reales (`notebook_pdf_ready`, fallo final, cancelación o interrupción).
 - La adopción de `notebookData` hacia una sesión visible ya no es ciega: `App.js` valida que `notebookSyncState.path` coincida con la sesión activa antes de hidratar, evitando contaminación cruzada cuando el usuario cambia rápido entre notebooks y el draft visible todavía pertenece al path anterior.
@@ -88,6 +88,7 @@
 - Modelo: cada conexión mantiene una cola saliente FIFO propia y un único writer task autorizado a hacer `websocket.send_text()`. `send_personal_message()`/`broadcast()` significan "payload aceptado por la cola" y no "flush físico ya completado". Desde 2026-04-20 el shell humano separa `/ws` para eventos globales (`workspace_fs_event`, `mcp_*`, control general, `.py`) y `/ws/notebook` para notebook/template/documento con un socket por sesión notebook.
 - Política de protección: si la cola se satura, la conexión se cierra con `1013/outgoing_queue_saturated` para evitar que un notebook o pipeline DOCX/PDF lento deje wedgeado al resto de los productores que comparten la misma sesión humana.
 - En frontend, `useAppWebSocket` replica ese aislamiento también en la retención local: la cola notebook ya no se recorta como buffer plano global, sino por bucket `socket/path`, preservando el orden local y evitando que una ráfaga de notebook A evicte los terminales de notebook B.
+- En frontend, `useWebSocket` del canal global conserva una cola acotada para mensajes críticos de template aceptados durante reconnect (`template_attach`/upload legacy), deduplica por `request_id` o attach key y solo permite marcar estado `pending` cuando `sendMessage()` devuelve aceptación efectiva.
 - Implicancia arquitectónica: la independencia real entre notebooks paralelos depende no solo de `kernel_id`/`execution_id`, sino también de aislar correctamente este transporte WS y de rebindear el ownership del kernel al socket notebook vigente; el riesgo residual de contención se acota al recurso Word/PDF global, no al canal de mensajes entre notebooks.
 
 7. **Estado interno de aplicación y workspace**
@@ -98,6 +99,11 @@
 - Owner: `template/storage.py` (persistencia), `template_extract.py` (modelo extraído + `style_browser` + `semantic_style_slots`), `template/preview.py` (cache LRU de previews), `template/mutation.py` y `template/table_format.py`, con fachada de compatibilidad en `template_service.py`.
 - Persistencia: archivos por kernel y estructuras extraídas/cacheadas por sesión, por defecto bajo `INSPYRO_APP_STATE_DIR/templates` salvo override `INSPYRO_TEMPLATE_DIR`.
 - En frontend, el ownership visible del template ya no vive en un shell-global `templateInfo/templateBlob`: queda particionado por notebook dentro de `notebookSessionsByPath`, y solo la sesión dueña puede reatachar o abrir su plantilla persistida.
+- `App.js` centraliza `template_attach` por token/path: upload/import REST solo producen `template_token`, `lastTemplateAttach` permanece `pending` hasta ACK `template_uploaded`/`template_info`, y `template_style_created`/`template_format_applied` con `template` completo rehidratan el estado sin polling adicional.
+- El binding persistible de plantilla vive en el `.ipynb` bajo `metadata.inspyro.template_binding` y apunta a un JSON portable relativo al directorio del notebook (`<stem>.inspyro-template.json` por defecto). `services/template_binding.py` resuelve rutas seguras, aplica el JSON al kernel al cargar/crear/resetear y mantiene `kernel_id -> binding` para que cada ACK autoritativo de template sobrescriba automáticamente ese JSON. Si el JSON falta o está corrupto, el estado `template_binding.status` viaja como `missing`/`error`, pero el notebook sigue ejecutándose sin plantilla.
+- La extracción conserva estilos ocultos/latentes y metadata `word_style`/`style_visibility`; la UI filtra esos estilos por defecto, pero el estado backend y los payloads no los descartan.
+- La persistencia de plantillas valida DOCX como ZIP antes de devolver estado; ante corrupción, cuarentena el binario, regenera un DOCX mínimo, reextrae JSON compatible y escribe DOCX/JSON con replace atómico y retry para mantener ambos artefactos coherentes.
+- Los previews automáticos del editor usan motor interno frontend; Word nativo queda bajo demanda y pasa por un lock/cola backend compartido entre previews de estilo y tabla, de modo que no compite en paralelo con otras conversiones Word.
 
 9. **Estado de artefactos descargables**
 - Owner: `docx_downloads.py`, `pdf_downloads.py`, `template_tokens.py`.

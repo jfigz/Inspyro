@@ -58,6 +58,8 @@ test.describe.serial('MCP UI', () => {
 
     await page.getByTestId('mcp-tab-activity').click();
     await expect(page.locator('.mcp-activity-list')).toContainText(/write_file/i, { timeout: 30000 });
+    await page.getByTestId('mcp-panel').getByRole('button', { name: 'Cerrar panel de agentes' }).click();
+    await expect(page.getByTestId('mcp-panel')).toHaveCount(0, { timeout: 15000 });
 
     const editor = getPrimaryMonacoTextarea(page);
     await editor.waitFor({ state: 'visible' });
@@ -70,7 +72,6 @@ test.describe.serial('MCP UI', () => {
     });
 
     await expect(page.locator('.view-lines')).toContainText(/No\s+sobrescribir\s+este\s+contenido/i, { timeout: 15000 });
-    await page.getByTestId('mcp-panel').getByRole('button', { name: 'Cerrar panel de agentes' }).click();
     await page.locator('.notification-badge').click();
     await expect(page.locator('.notification-dropdown')).toContainText(/MCP no reflejado|cambios locales sin guardar/i, { timeout: 30000 });
     await page.locator('.notification-badge').click();

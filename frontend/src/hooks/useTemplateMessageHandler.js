@@ -20,8 +20,30 @@ const isTemplateMessageType = (messageType) => (
   || messageType === WS_MSG.TEMPLATE_STYLE_UPDATED
   || messageType === WS_MSG.TEMPLATE_DOCUMENT_DEFAULTS_UPDATED
   || messageType === WS_MSG.TEMPLATE_SEMANTIC_SLOTS_UPDATED
+  || messageType === WS_MSG.TEMPLATE_STYLE_CREATED
+  || messageType === WS_MSG.TEMPLATE_FORMAT_APPLIED
   || messageType === WS_MSG.TEMPLATE_ERROR
   || messageType === 'error'
+);
+
+const buildTemplateAttachState = (message, previous = {}) => {
+  const kernelId = message?.kernel_id || previous?.lastTemplateAttach?.kernelId || previous?.kernelState?.kernelId || null;
+  const token = message?.template_token || previous?.templateBlob?.templateToken || null;
+  if (!kernelId || !token) {
+    return previous?.lastTemplateAttach || null;
+  }
+  return {
+    kernelId,
+    attachKey: `token:${token}`,
+    status: 'attached',
+    requestId: message?.request_id || null,
+  };
+};
+
+const templateBindingPatch = (message) => (
+  Object.prototype.hasOwnProperty.call(message || {}, 'template_binding')
+    ? { templateBinding: message.template_binding || null }
+    : {}
 );
 
 const applyLegacyTemplateMessage = ({
@@ -78,6 +100,22 @@ const applyLegacyTemplateMessage = ({
         onStatusMessage?.('Slots semánticos actualizados', 'success');
       }
       break;
+    case WS_MSG.TEMPLATE_STYLE_CREATED:
+      if (lastMessage.template) {
+        setTemplateInfo?.(lastMessage.template);
+      }
+      if (!isCorrelatedRequest) {
+        onStatusMessage?.(`Estilo "${lastMessage.style_name || 'tabla'}" creado`, 'success');
+      }
+      break;
+    case WS_MSG.TEMPLATE_FORMAT_APPLIED:
+      if (lastMessage.template) {
+        setTemplateInfo?.(lastMessage.template);
+      }
+      if (!isCorrelatedRequest) {
+        onStatusMessage?.(lastMessage.message || 'Formato de tabla aplicado', 'success');
+      }
+      break;
     case WS_MSG.TEMPLATE_ERROR:
       if (!isCorrelatedRequest) {
         onStatusMessage?.(
@@ -111,6 +149,7 @@ const applySessionTemplateMessage = ({
     case WS_MSG.TEMPLATE_UPLOADED:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: message.template || null,
         templateBlob: message.template_token
           ? {
@@ -118,7 +157,7 @@ const applySessionTemplateMessage = ({
             templateToken: message.template_token,
           }
           : previous.templateBlob,
-        lastTemplateAttach: null,
+        lastTemplateAttach: buildTemplateAttachState(message, previous),
       }));
       if (!isCorrelatedRequest && isActiveTarget) {
         onStatusMessage?.('Plantilla cargada exitosamente', 'success');
@@ -127,12 +166,14 @@ const applySessionTemplateMessage = ({
     case WS_MSG.TEMPLATE_INFO:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: message.template || null,
       }));
       break;
     case WS_MSG.TEMPLATE_DELETED:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: null,
         templateBlob: null,
         templateOpenRequest: null,
@@ -145,6 +186,7 @@ const applySessionTemplateMessage = ({
     case WS_MSG.TEMPLATE_STYLE_UPDATED:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: message.template || null,
       }));
       if (!isCorrelatedRequest && isActiveTarget) {
@@ -154,6 +196,7 @@ const applySessionTemplateMessage = ({
     case WS_MSG.TEMPLATE_DOCUMENT_DEFAULTS_UPDATED:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: message.template || null,
       }));
       if (!isCorrelatedRequest && isActiveTarget) {
@@ -163,13 +206,47 @@ const applySessionTemplateMessage = ({
     case WS_MSG.TEMPLATE_SEMANTIC_SLOTS_UPDATED:
       updateNotebookSession(targetPath, (previous) => ({
         ...previous,
+        ...templateBindingPatch(message),
         templateInfo: message.template || null,
       }));
       if (!isCorrelatedRequest && isActiveTarget) {
         onStatusMessage?.('Slots semánticos actualizados', 'success');
       }
       break;
+    case WS_MSG.TEMPLATE_STYLE_CREATED:
+      updateNotebookSession(targetPath, (previous) => ({
+        ...previous,
+        ...templateBindingPatch(message),
+        templateInfo: message.template || previous.templateInfo || null,
+      }));
+      if (!isCorrelatedRequest && isActiveTarget) {
+        onStatusMessage?.(`Estilo "${message.style_name || 'tabla'}" creado`, 'success');
+      }
+      break;
+    case WS_MSG.TEMPLATE_FORMAT_APPLIED:
+      updateNotebookSession(targetPath, (previous) => ({
+        ...previous,
+        ...templateBindingPatch(message),
+        templateInfo: message.template || previous.templateInfo || null,
+      }));
+      if (!isCorrelatedRequest && isActiveTarget) {
+        onStatusMessage?.(message.message || 'Formato de tabla aplicado', 'success');
+      }
+      break;
     case WS_MSG.TEMPLATE_ERROR:
+      updateNotebookSession(targetPath, (previous) => {
+        const lastAttach = previous.lastTemplateAttach;
+        const requestMatches = message.request_id
+          ? lastAttach?.requestId === message.request_id
+          : true;
+        if (lastAttach?.status === 'pending' && requestMatches) {
+          return {
+            ...previous,
+            lastTemplateAttach: null,
+          };
+        }
+        return previous;
+      });
       if (!isCorrelatedRequest && isActiveTarget) {
         onStatusMessage?.(
           `Error de plantilla: ${message.error || message.message || 'Error desconocido'}`,
@@ -178,6 +255,19 @@ const applySessionTemplateMessage = ({
       }
       break;
     case 'error':
+      updateNotebookSession(targetPath, (previous) => {
+        const lastAttach = previous.lastTemplateAttach;
+        const requestMatches = message.request_id
+          ? lastAttach?.requestId === message.request_id
+          : true;
+        if (lastAttach?.status === 'pending' && requestMatches) {
+          return {
+            ...previous,
+            lastTemplateAttach: null,
+          };
+        }
+        return previous;
+      });
       if (isActiveTarget) {
         onStatusMessage?.(message.message || 'Error de comunicación WebSocket', 'error');
       }

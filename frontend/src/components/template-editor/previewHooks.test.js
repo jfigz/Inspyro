@@ -58,6 +58,33 @@ describe('template preview hooks', () => {
     }));
   });
 
+  it('marks explicit native Word style preview requests', () => {
+    const sendMessage = jest.fn();
+    const { result } = renderHook(() => useStylePreviewPipeline({
+      sendMessage,
+      kernelId: 'kernel-preview',
+      normalizePreviewProps: (props) => props,
+      buildPreviewKey: (styleName, props) => `${styleName}:${props.version}`,
+    }));
+
+    act(() => {
+      result.current.handleRequestPreview('Normal', { version: 1 }, {
+        immediate: true,
+        force: true,
+        previewEngine: 'word_native',
+      });
+    });
+    act(() => {
+      jest.advanceTimersByTime(0);
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_preview_style',
+      preview_engine: 'word_native',
+      native_word_preview: true,
+    }));
+  });
+
   it('cancels in-flight table previews when leaving direct mode', async () => {
     const sendMessage = jest.fn();
     const onStatusMessage = jest.fn();

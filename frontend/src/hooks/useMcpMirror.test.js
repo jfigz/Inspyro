@@ -353,6 +353,58 @@ describe('useMcpMirror', () => {
     expect(reloadFileByPath).toHaveBeenCalledWith(TARGET_FILE);
   });
 
+  it('blocks file write mutations after dirty state changes before the mirror event arrives', async () => {
+    const onNotify = jest.fn();
+    const onRefreshWorkspace = jest.fn();
+    const reloadFileByPath = jest.fn().mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(({ lastMessage, modifiedFiles }) => useMcpMirror(buildProps({
+      lastMessage,
+      activeFile: { path: TARGET_FILE },
+      openFiles: [{ path: TARGET_FILE }],
+      modifiedFiles,
+      onNotify,
+      onRefreshWorkspace,
+      reloadFileByPath,
+    })), {
+      initialProps: {
+        lastMessage: null,
+        modifiedFiles: new Set(),
+      },
+    });
+
+    rerender({
+      lastMessage: null,
+      modifiedFiles: new Set([TARGET_FILE]),
+    });
+
+    rerender({
+      lastMessage: buildMirrorMessage({
+        tool_name: 'write_file',
+        tool_group: 'files',
+        action: 'file_mutation',
+        resource: { path: TARGET_FILE },
+        payload: {
+          mutation: 'write',
+          path: TARGET_FILE,
+          file_kind: 'code',
+          is_directory: false,
+        },
+      }),
+      modifiedFiles: new Set([TARGET_FILE]),
+    });
+
+    await waitFor(() => expect(onRefreshWorkspace).toHaveBeenCalledTimes(1));
+    expect(reloadFileByPath).not.toHaveBeenCalled();
+    expect(onNotify).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'MCP no reflejado',
+      target: expect.objectContaining({
+        kind: 'file',
+        path: TARGET_FILE,
+      }),
+    }));
+  });
+
   it('retargets clean tabs on rename mutations', async () => {
     const onRefreshWorkspace = jest.fn();
     const renameOpenFile = jest.fn();

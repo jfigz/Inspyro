@@ -50,11 +50,13 @@ class InspyroBridge:
     """Cliente async session-scoped que conecta con el backend Inspyro local."""
 
     _instance: Optional["InspyroBridge"] = None
-    _instances: dict[str, "InspyroBridge"] = {}
+    _instances: dict[tuple[str, str], "InspyroBridge"] = {}
     _instances_lock = threading.RLock()
 
-    def __init__(self, *, session_id: str) -> None:
+    def __init__(self, *, session_id: str, websocket_scope: str = "default") -> None:
         self._session_id = resolve_session_id(session_id)
+        self._websocket_scope = self._normalize_websocket_scope(websocket_scope)
+        self._active_ws_url: str | None = None
         self._http: Optional[httpx.AsyncClient] = None
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._ws_lock = asyncio.Lock()
@@ -63,6 +65,11 @@ class InspyroBridge:
         self._listener_task: Optional[asyncio.Task[None]] = None
         self._connected = False
         self._session_state = McpSessionState.get()
+
+    @staticmethod
+    def _normalize_websocket_scope(value: str | None) -> str:
+        text = str(value or "default").strip().lower() or "default"
+        return "notebook" if text == "notebook" else "default"
 
     def register_execution_observer(
         self,
@@ -88,15 +95,17 @@ class InspyroBridge:
         return queue, unregister
 
     @classmethod
-    def get(cls, session_id: str | None = None) -> "InspyroBridge":
+    def get(cls, session_id: str | None = None, *, websocket_scope: str = "default") -> "InspyroBridge":
         """Obtiene la instancia del bridge para la sesion MCP actual."""
         resolved_session = resolve_session_id(session_id)
+        resolved_scope = cls._normalize_websocket_scope(websocket_scope)
+        instance_key = (resolved_session, resolved_scope)
         with cls._instances_lock:
-            instance = cls._instances.get(resolved_session)
+            instance = cls._instances.get(instance_key)
             if instance is None:
-                instance = cls(session_id=resolved_session)
-                cls._instances[resolved_session] = instance
-            if resolved_session == DEFAULT_SESSION_ID:
+                instance = cls(session_id=resolved_session, websocket_scope=resolved_scope)
+                cls._instances[instance_key] = instance
+            if resolved_session == DEFAULT_SESSION_ID and resolved_scope == "default":
                 cls._instance = instance
             return instance
 
@@ -141,20 +150,51 @@ class InspyroBridge:
             except asyncio.CancelledError:
                 pass
 
-        try:
-            self._ws = await websockets.connect(
-                config.BACKEND_WS_URL,
-                max_size=50 * 1024 * 1024,
-                ping_interval=20,
-                ping_timeout=20,
-                close_timeout=5,
-            )
-            self._listener_task = asyncio.create_task(self._ws_listener())
-            logger.info("WebSocket conectado a %s", config.BACKEND_WS_URL)
-        except Exception as exc:
-            logger.warning("No se pudo conectar WS a %s: %s", config.BACKEND_WS_URL, exc)
+        primary_ws_url = (
+            config.BACKEND_NOTEBOOK_WS_URL
+            if self._websocket_scope == "notebook"
+            else config.BACKEND_WS_URL
+        )
+        candidate_urls = [primary_ws_url]
+        if self._websocket_scope == "notebook" and config.BACKEND_WS_URL not in candidate_urls:
+            candidate_urls.append(config.BACKEND_WS_URL)
+
+        last_exc: Exception | None = None
+        for index, ws_url in enumerate(candidate_urls):
+            try:
+                self._ws = await websockets.connect(
+                    ws_url,
+                    max_size=50 * 1024 * 1024,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                )
+                self._active_ws_url = ws_url
+                self._listener_task = asyncio.create_task(self._ws_listener())
+                if index > 0:
+                    logger.warning(
+                        "WebSocket notebook dedicado no disponible; usando fallback %s",
+                        ws_url,
+                    )
+                else:
+                    logger.info("WebSocket conectado a %s", ws_url)
+                return
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("No se pudo conectar WS a %s: %s", ws_url, exc)
+
+        if last_exc is not None:
             self._ws = None
+            self._active_ws_url = None
             self._notify_disconnect("websocket_connect_failed")
+
+    def connection_info(self) -> dict[str, Any]:
+        return {
+            "session_id": self._session_id,
+            "websocket_scope": self._websocket_scope,
+            "websocket_url": self._active_ws_url,
+            "connected": self._connected and not self._ws_is_closed(),
+        }
 
     async def _ensure_http(self) -> httpx.AsyncClient:
         if self._http is None:

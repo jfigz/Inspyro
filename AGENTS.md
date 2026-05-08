@@ -263,7 +263,7 @@ Instalar con: `pip install -r backend/mcp_server/requirements-mcp.txt`
 ### Windows
 
 ```powershell
-git clone https://github.com/jfigz/Inspyro.git
+git clone https://github.com/jfigz/P2.git
 cd P2
 python -m venv venv_inspyro
 .\venv_inspyro\Scripts\activate
@@ -277,7 +277,7 @@ cd ..
 ### Linux/WSL
 
 ```bash
-git clone https://github.com/jfigz/Inspyro.git
+git clone https://github.com/jfigz/P2.git
 cd P2
 python3 -m venv venv_inspyro
 source venv_inspyro/bin/activate

@@ -58,6 +58,21 @@ class _IdleIopubChannel:
         raise asyncio.TimeoutError()
 
 
+class _UnparentedIdleIopubChannel:
+    def __init__(self) -> None:
+        self._sent = False
+
+    async def get_msg(self, timeout=None) -> dict:
+        if not self._sent:
+            self._sent = True
+            return {
+                "parent_header": {},
+                "msg_type": "status",
+                "content": {"execution_state": "idle"},
+            }
+        raise asyncio.TimeoutError()
+
+
 class _EmptyThenIdleIopubChannel:
     def __init__(self, parent_msg_id: str) -> None:
         self.parent_msg_id = parent_msg_id
@@ -119,6 +134,22 @@ class _RestartTrackingManager:
 
     def client(self) -> _RestartTrackingClient:
         return self.new_client
+
+
+class _StartupRetryClient:
+    def __init__(self, parent_msg_id: str) -> None:
+        self.parent_msg_id = parent_msg_id
+        self.started = 0
+        self.stopped = 0
+
+    def start_channels(self) -> None:
+        self.started += 1
+
+    def stop_channels(self) -> None:
+        self.stopped += 1
+
+    def execute(self, *args, **kwargs) -> str:
+        return self.parent_msg_id
 
 
 def _build_session(client: _FakeClient) -> KernelSession:
@@ -186,6 +217,19 @@ async def test_execute_cell_locked_treats_empty_iopub_reads_as_benign():
     assert variables == {}
     assert extras["performance_data"] == {}
     assert extras.get("execution_diagnostics") is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_idle_accepts_unparented_idle_status():
+    parent_msg_id = "msg-unparented-idle"
+    client = _FakeClient(
+        parent_msg_id=parent_msg_id,
+        shell_channel=_FakeShellChannel({}),
+        iopub_channel=_UnparentedIdleIopubChannel(),
+    )
+    manager = JupyterKernelManager()
+
+    assert await manager._wait_for_idle(client, parent_msg_id=parent_msg_id, timeout=1) is True
 
 
 @pytest.mark.asyncio
@@ -320,6 +364,94 @@ async def test_execute_cell_locked_cancels_iopub_task_when_execute_reply_times_o
         )
 
     assert iopub_cancelled.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_session_readiness_health_check_restarts_once_before_execution(monkeypatch):
+    parent_msg_id = "msg-health"
+    client = _FakeClient(
+        parent_msg_id=parent_msg_id,
+        shell_channel=_FakeShellChannel(
+            {
+                "parent_header": {"msg_id": parent_msg_id},
+                "msg_type": "execute_reply",
+                "content": {"execution_count": 1},
+            }
+        ),
+        iopub_channel=_IdleIopubChannel(parent_msg_id),
+    )
+    manager = JupyterKernelManager()
+    session = _build_session(client)
+    manager._sessions[session.kernel_id] = session
+    idle_results = [False, True]
+    restart_calls: list[str] = []
+
+    async def _no_stale_messages(*args, **kwargs):
+        return 0
+
+    async def _execute_reply(*args, **kwargs):
+        return {
+            "parent_header": {"msg_id": parent_msg_id},
+            "msg_type": "execute_reply",
+            "content": {"execution_count": 1},
+        }
+
+    async def _idle_once_after_restart(*args, **kwargs):
+        return idle_results.pop(0)
+
+    async def _restart(kernel_id: str):
+        restart_calls.append(kernel_id)
+
+    monkeypatch.setattr(manager, "_drain_stale_channel_messages", _no_stale_messages)
+    monkeypatch.setattr(manager, "_wait_for_execute_reply", _execute_reply)
+    monkeypatch.setattr(manager, "_wait_for_idle", _idle_once_after_restart)
+    monkeypatch.setattr(manager, "restart_kernel", _restart)
+
+    await manager._ensure_session_ready_locked(session)
+
+    assert restart_calls == ["kernel-test"]
+    assert session.ready is True
+    assert session.last_kernel_diagnostics["health_check_ready"] is True
+    assert session.last_kernel_diagnostics["health_check_attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_start_kernel_recreates_once_when_startup_idle_is_missing(monkeypatch):
+    created_managers = []
+
+    class _StartupRetryManager:
+        def __init__(self, kernel_name: str = "python3") -> None:
+            self.kernel_name = kernel_name
+            self.kernel_id = f"kernel-start-{len(created_managers) + 1}"
+            self.client_obj = _StartupRetryClient(f"msg-{len(created_managers) + 1}")
+            self.shutdown_calls: list[bool] = []
+            created_managers.append(self)
+
+        async def start_kernel(self, **kwargs) -> None:
+            return None
+
+        async def shutdown_kernel(self, now: bool = False) -> None:
+            self.shutdown_calls.append(now)
+
+        def client(self) -> _StartupRetryClient:
+            return self.client_obj
+
+    manager = JupyterKernelManager()
+    idle_results = [False, True]
+
+    async def _idle_once_after_recreate(*args, **kwargs):
+        return idle_results.pop(0)
+
+    monkeypatch.setattr(jupyter_kernel_module, "AsyncKernelManager", _StartupRetryManager)
+    monkeypatch.setattr(manager, "_wait_for_idle", _idle_once_after_recreate)
+
+    kernel_id = await manager.start_kernel()
+
+    assert kernel_id == "kernel-start-2"
+    assert len(created_managers) == 2
+    assert created_managers[0].client_obj.stopped == 1
+    assert created_managers[0].shutdown_calls == [True]
+    assert manager.get_kernel_diagnostics(kernel_id)["ready"] is True
 
 
 @pytest.mark.asyncio

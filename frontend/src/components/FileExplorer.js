@@ -88,6 +88,12 @@ const collectTree = (node, nodes = {}, children = {}) => {
   return { nodes, children };
 };
 
+const findEquivalentPath = (paths, target) => {
+  const normalizedTarget = normalizePath(target);
+  if (!normalizedTarget) return null;
+  return Array.from(paths || []).find((candidate) => normalizePath(candidate) === normalizedTarget) || null;
+};
+
 const TreeNode = ({
   path,
   depth,
@@ -260,12 +266,23 @@ export default function FileExplorer({
   const nodesRef = useRef(nodesByPath);
   const rootPathRef = useRef(rootPath);
   const inflightLoadsRef = useRef(new Map());
+  const loadScope = useMemo(() => [
+    normalizePath(currentWorkspace) || '',
+    showHidden ? 'hidden' : 'visible',
+    String(refreshToken ?? 0),
+  ].join('|'), [currentWorkspace, refreshToken, showHidden]);
+  const loadScopeRef = useRef(loadScope);
 
   useEffect(() => { loadedRef.current = loaded; }, [loaded]);
   useEffect(() => { expandedRef.current = expanded; }, [expanded]);
   useEffect(() => { nodesRef.current = nodesByPath; }, [nodesByPath]);
   useEffect(() => { rootPathRef.current = rootPath; }, [rootPath]);
   useEffect(() => { localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? '1' : '0'); }, [showHidden]);
+  useEffect(() => {
+    loadScopeRef.current = loadScope;
+    inflightLoadsRef.current.clear();
+    setLoadingPaths(new Set());
+  }, [loadScope]);
   useEffect(() => {
     const clamped = Math.max(220, Math.min(420, Number(widthPx) || 260));
     if (onWidthChange && widthPx !== clamped) onWidthChange(clamped);
@@ -275,7 +292,9 @@ export default function FileExplorer({
     const normalizedPath = normalizePath(path);
     if (!path || !normalizedPath) return null;
 
-    const inflightLoad = inflightLoadsRef.current.get(normalizedPath);
+    const activeLoadScope = loadScopeRef.current;
+    const inflightKey = `${activeLoadScope}:${normalizedPath}`;
+    const inflightLoad = inflightLoadsRef.current.get(inflightKey);
     if (inflightLoad) {
       return inflightLoad;
     }
@@ -300,6 +319,7 @@ export default function FileExplorer({
         const response = await fetch(`${API_BASE}/api/files/tree?path=${encodeURIComponent(path)}&depth=1&show_hidden=${showHidden ? '1' : '0'}`);
         if (!response.ok) throw new Error(await readErrorMessage(response, 'No se pudo cargar la carpeta'));
         const payload = await response.json();
+        if (loadScopeRef.current !== activeLoadScope) return null;
         const { nodes, children } = collectTree(payload);
         setNodesByPath((prev) => ({ ...prev, ...nodes }));
         setChildrenByPath((prev) => ({ ...prev, ...children }));
@@ -314,26 +334,45 @@ export default function FileExplorer({
         setError(null);
         return payload;
       } catch (err) {
-        setError(err.message || 'No se pudo cargar el explorador');
+        if (loadScopeRef.current === activeLoadScope) {
+          setError(err.message || 'No se pudo cargar el explorador');
+        }
         return null;
       } finally {
-        inflightLoadsRef.current.delete(normalizedPath);
-        setLoadingPaths((prev) => {
-          const next = new Set(prev);
-          next.delete(path);
-          return next;
-        });
+        inflightLoadsRef.current.delete(inflightKey);
+        if (loadScopeRef.current === activeLoadScope) {
+          setLoadingPaths((prev) => {
+            const next = new Set(prev);
+            next.delete(path);
+            return next;
+          });
+        }
       }
     })();
 
-    inflightLoadsRef.current.set(normalizedPath, loadPromise);
+    inflightLoadsRef.current.set(inflightKey, loadPromise);
     return loadPromise;
   }, [currentWorkspace, showHidden]);
 
   const refreshFolders = useCallback(async (paths) => {
-    const nextPaths = Array.from(new Set((paths || []).filter(Boolean))).filter((path) => (
-      loadedRef.current.has(path) || normalizePath(path) === normalizePath(currentWorkspace)
-    ));
+    const seen = new Set();
+    const nextPaths = [];
+    (paths || []).filter(Boolean).forEach((path) => {
+      const normalized = normalizePath(path);
+      if (!normalized || seen.has(normalized)) return;
+      const loadedPath = findEquivalentPath(loadedRef.current, path);
+      if (loadedPath) {
+        if (isSameOrDescendant(loadedPath, currentWorkspace)) {
+          seen.add(normalized);
+          nextPaths.push(loadedPath);
+        }
+        return;
+      }
+      if (normalizePath(path) === normalizePath(currentWorkspace)) {
+        seen.add(normalized);
+        nextPaths.push(currentWorkspace);
+      }
+    });
     for (const path of nextPaths) await loadFolder(path, true);
   }, [currentWorkspace, loadFolder]);
 
@@ -370,7 +409,9 @@ export default function FileExplorer({
 
   const refreshExplorer = useCallback(async () => {
     if (!currentWorkspace) return;
-    const expandedSnapshot = Array.from(expandedRef.current);
+    const expandedSnapshot = Array.from(expandedRef.current).filter((path) => (
+      isSameOrDescendant(path, currentWorkspace)
+    ));
     await loadFolder(currentWorkspace, true);
     for (const path of expandedSnapshot) {
       if (normalizePath(path) !== normalizePath(currentWorkspace)) await loadFolder(path, true);
@@ -399,25 +440,42 @@ export default function FileExplorer({
 
   useEffect(() => {
     if (!currentWorkspace) {
+      inflightLoadsRef.current.clear();
+      rootPathRef.current = null;
+      nodesRef.current = {};
+      loadedRef.current = new Set();
+      expandedRef.current = new Set();
       setRootPath(null);
       setNodesByPath({});
       setChildrenByPath({});
       setExpanded(new Set());
       setLoaded(new Set());
+      setLoadingPaths(new Set());
+      setPendingPaths(new Set());
       setSelectedPath(null);
       setSearchResults([]);
+      setError(null);
       return;
     }
-    const workspaceChanged = normalizePath(rootPath) !== normalizePath(currentWorkspace);
+    const workspaceChanged = normalizePath(rootPathRef.current) !== normalizePath(currentWorkspace);
     if (workspaceChanged) {
+      const nextExpanded = new Set([currentWorkspace]);
+      inflightLoadsRef.current.clear();
+      rootPathRef.current = currentWorkspace;
+      nodesRef.current = {};
+      loadedRef.current = new Set();
+      expandedRef.current = nextExpanded;
       setNodesByPath({});
       setChildrenByPath({});
       setLoaded(new Set());
-      setExpanded(new Set([currentWorkspace]));
+      setExpanded(nextExpanded);
+      setLoadingPaths(new Set());
+      setPendingPaths(new Set());
       setSelectedPath(activeFilePath || currentWorkspace);
       setRootPath(currentWorkspace);
+      setError(null);
     }
-  }, [activeFilePath, currentWorkspace, rootPath]);
+  }, [activeFilePath, currentWorkspace]);
 
   useEffect(() => {
     if (!currentWorkspace) return;
@@ -486,7 +544,8 @@ export default function FileExplorer({
     return () => window.removeEventListener('click', close);
   }, [contextMenu]);
 
-  const selectedNode = nodesByPath[selectedPath] || nodesByPath[rootPath] || null;
+  const visibleRootPath = normalizePath(rootPath) === normalizePath(currentWorkspace) ? rootPath : null;
+  const selectedNode = nodesByPath[selectedPath] || nodesByPath[visibleRootPath] || null;
   const canMutateSelection = Boolean(selectedNode?.path) && normalizePath(selectedNode.path) !== normalizePath(currentWorkspace);
   const resolveCreateParentPath = () => fileActionDialog.parentPath || (selectedNode?.isDirectory ? selectedNode.path : (selectedNode?.path ? parentPathOf(selectedNode.path) : currentWorkspace));
   const openActionDialog = (mode, parentPath = null) => {
@@ -759,12 +818,12 @@ export default function FileExplorer({
             ))}
           </div>
         )}
-        {!error && currentWorkspace && !searchMode && rootPath && nodesByPath[rootPath] && (
+        {!error && currentWorkspace && !searchMode && visibleRootPath && nodesByPath[visibleRootPath] && (
           <div className="file-tree" role="tree" aria-label="Arbol de archivos del workspace">
             <TreeNode
-              path={rootPath}
+              path={visibleRootPath}
               depth={0}
-              rootPath={rootPath}
+              rootPath={visibleRootPath}
               nodesByPath={nodesByPath}
               childrenByPath={childrenByPath}
               expanded={expanded}

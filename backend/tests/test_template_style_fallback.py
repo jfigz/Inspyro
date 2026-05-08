@@ -193,6 +193,74 @@ def _patch_theme_fonts_and_docdefaults(
         fh.write(dst.getvalue())
 
 
+def _patch_style_legacy_font_and_alt_name(
+    template_path: str,
+    *,
+    style_name: str,
+    style_id: str,
+    font_name: str,
+    alt_name: str,
+) -> None:
+    with open(template_path, "rb") as fh:
+        raw = fh.read()
+    src = io.BytesIO(raw)
+    dst = io.BytesIO()
+
+    with zipfile.ZipFile(src, "r") as zin:
+        styles_root = ET.fromstring(zin.read("word/styles.xml"))
+        style_elem = styles_root.find(f"w:style[@w:styleId='{style_id}']", DOCX_NS)
+        if style_elem is None:
+            style_elem = _find_style_element(styles_root, style_name)
+        if style_elem is None:
+            raise AssertionError(f"Missing style {style_name}")
+        style_elem.set(qn("w:styleId"), style_id)
+
+        r_pr = style_elem.find("w:rPr", DOCX_NS)
+        if r_pr is None:
+            r_pr = ET.SubElement(style_elem, qn("w:rPr"))
+        r_fonts = r_pr.find("w:rFonts", DOCX_NS)
+        if r_fonts is None:
+            r_fonts = ET.SubElement(r_pr, qn("w:rFonts"))
+        for attr_name in ("ascii", "hAnsi", "cs", "eastAsia"):
+            r_fonts.set(qn(f"w:{attr_name}"), font_name)
+        for attr_name in ("asciiTheme", "hAnsiTheme", "csTheme", "eastAsiaTheme"):
+            r_fonts.attrib.pop(qn(f"w:{attr_name}"), None)
+
+        try:
+            font_table_root = ET.fromstring(zin.read("word/fontTable.xml"))
+        except KeyError:
+            font_table_root = ET.Element(qn("w:fonts"))
+
+        font_elem = font_table_root.find(f"w:font[@w:name='{font_name}']", DOCX_NS)
+        if font_elem is None:
+            font_elem = ET.SubElement(font_table_root, qn("w:font"))
+            font_elem.set(qn("w:name"), font_name)
+        alt_elem = font_elem.find("w:altName", DOCX_NS)
+        if alt_elem is None:
+            alt_elem = ET.SubElement(font_elem, qn("w:altName"))
+        alt_elem.set(qn("w:val"), alt_name)
+
+        updated_styles = ET.tostring(styles_root, encoding="utf-8", xml_declaration=True)
+        updated_font_table = ET.tostring(font_table_root, encoding="utf-8", xml_declaration=True)
+
+        wrote_font_table = False
+        with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename == "word/styles.xml":
+                    zout.writestr(item, updated_styles)
+                    continue
+                if item.filename == "word/fontTable.xml":
+                    zout.writestr(item, updated_font_table)
+                    wrote_font_table = True
+                    continue
+                zout.writestr(item, zin.read(item.filename))
+            if not wrote_font_table:
+                zout.writestr("word/fontTable.xml", updated_font_table)
+
+    with open(template_path, "wb") as fh:
+        fh.write(dst.getvalue())
+
+
 def _get_style_numpr(style_obj):
     p_pr = style_obj.element.find(qn("w:pPr"))
     if p_pr is None:
@@ -253,6 +321,17 @@ def _read_doc_defaults_props(docx_path: str) -> dict[str, dict[str, str | None]]
         "jc": _attrs(jc, ("val",)),
         "ind": _attrs(ind, ("left", "right", "firstLine", "hanging")),
     }
+
+
+def _read_paragraph_style_ids(docx_bytes: bytes) -> list[str | None]:
+    with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zf:
+        document_root = ET.fromstring(zf.read("word/document.xml"))
+
+    style_ids: list[str | None] = []
+    for paragraph in document_root.findall(".//w:body/w:p", DOCX_NS):
+        p_style = paragraph.find("w:pPr/w:pStyle", DOCX_NS)
+        style_ids.append(p_style.get(qn("w:val")) if p_style is not None else None)
+    return style_ids
 
 
 @unittest.skipUnless(HAS_DOCX, "python-docx not available")
@@ -411,6 +490,84 @@ class TestTemplateStyleFallback(unittest.TestCase):
 
         self.assertIn("Century Gothic", extracted.get("font_catalog", []))
         self.assertEqual((extracted.get("default_font") or {}).get("name"), "Century Gothic")
+
+    def test_legacy_font_altname_is_preserved_and_can_be_replaced(self):
+        path = self._template_path("legacy-font-altname.docx")
+        doc = Document()
+        body_style = doc.styles["Body Text"]
+        body_style.font.name = "CG Times (W1)"
+        body_style.font.size = Pt(13)
+        doc.add_paragraph("Texto base", style="Body Text")
+        doc.save(path)
+        _patch_style_legacy_font_and_alt_name(
+            path,
+            style_name="Body Text",
+            style_id="Textoindependiente",
+            font_name="CG Times (W1)",
+            alt_name="Times New Roman",
+        )
+
+        docx_bytes = Path(path).read_bytes()
+        extracted = template_service.extract_styles_from_docx(docx_bytes)
+        extracted_body = next(
+            style for style in extracted.get("styles", [])
+            if style.get("style_id") == "Textoindependiente" or style.get("name") == "Body Text"
+        )
+        self.assertEqual(
+            (extracted_body.get("xml_font") or {}).get("font_name")
+            or (extracted_body.get("xml_font") or {}).get("name"),
+            "CG Times (W1)",
+        )
+        self.assertEqual(
+            (extracted_body.get("resolved_font") or {}).get("font_name")
+            or (extracted_body.get("resolved_font") or {}).get("name"),
+            "CG Times (W1)",
+        )
+        font_table = ((extracted.get("xml_details") or {}).get("font_table") or {}).get("fonts") or []
+        legacy_font = next(font for font in font_table if font.get("name") == "CG Times (W1)")
+        self.assertEqual(legacy_font.get("alt_name"), "Times New Roman")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_template_dir = template_service.TEMPLATE_DIR
+            template_service.TEMPLATE_DIR = Path(tmp_dir)
+            try:
+                kernel_id = "kernel-legacy-font-altname"
+                template_service.save_template(kernel_id, docx_bytes, extracted)
+
+                updated = template_service.update_template_style(
+                    kernel_id,
+                    "Body Text",
+                    {
+                        "style_id": "Textoindependiente",
+                        "font_name": "Arial",
+                    },
+                )
+
+                rfonts = _read_style_rfonts_attrs(
+                    str(template_service._get_template_docx_path(kernel_id)),
+                    "Body Text",
+                    "Textoindependiente",
+                )
+                self.assertEqual(rfonts.get("ascii"), "Arial")
+                self.assertEqual(rfonts.get("hAnsi"), "Arial")
+                self.assertEqual(rfonts.get("cs"), "Arial")
+                self.assertEqual(rfonts.get("eastAsia"), "Arial")
+                self.assertIsNone(rfonts.get("asciiTheme"))
+                self.assertIsNone(rfonts.get("hAnsiTheme"))
+                self.assertIsNone(rfonts.get("csTheme"))
+                self.assertIsNone(rfonts.get("eastAsiaTheme"))
+
+                updated_body = next(
+                    style for style in updated.get("styles", [])
+                    if style.get("style_id") == "Textoindependiente" or style.get("name") == "Body Text"
+                )
+                self.assertEqual(
+                    (updated_body.get("resolved_font") or {}).get("font_name")
+                    or (updated_body.get("resolved_font") or {}).get("name"),
+                    "Arial",
+                )
+            finally:
+                template_service.TEMPLATE_DIR = original_template_dir
 
     def test_extract_styles_from_docx_resolves_theme_minor_docdefaults_font(self):
         path = self._save_blank_template("theme-docdefaults-font.docx")
@@ -691,6 +848,124 @@ class TestTemplateStyleFallback(unittest.TestCase):
                 self.assertEqual(
                     (heading_style.get("resolved_font") or {}).get("name"),
                     (heading_before.get("resolved_font") or {}).get("name"),
+                )
+            finally:
+                template_service.TEMPLATE_DIR = original_template_dir
+
+    def test_spanish_style_ids_survive_style_update_and_runtime_slots(self):
+        path = self._template_path("spanish-style-ids.docx")
+        doc = Document()
+        body_style = doc.styles["Body Text"]
+        body_style.element.set(qn("w:styleId"), "Textoindependiente")
+        body_style.font.name = "Century Gothic"
+        body_style.font.size = Pt(11)
+
+        heading_style = doc.styles["Heading 1"]
+        heading_style.element.set(qn("w:styleId"), "Ttulo1")
+        heading_style.font.name = "Century Gothic"
+        heading_style.font.size = Pt(16)
+        p_pr = heading_style.element.find(qn("w:pPr"))
+        if p_pr is None:
+            p_pr = OxmlElement("w:pPr")
+            heading_style.element.append(p_pr)
+        outline_level = OxmlElement("w:outlineLvl")
+        outline_level.set(qn("w:val"), "0")
+        p_pr.append(outline_level)
+
+        doc.add_paragraph("Texto base", style="Body Text")
+        doc.save(path)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_template_dir = template_service.TEMPLATE_DIR
+            template_service.TEMPLATE_DIR = Path(tmp_dir)
+            try:
+                kernel_id = "kernel-spanish-style-ids"
+                docx_bytes = Path(path).read_bytes()
+                extracted = template_service.extract_styles_from_docx(docx_bytes)
+                extracted[template_service.SEMANTIC_STYLE_SLOTS_KEY] = {
+                    "body": {
+                        "slot_name": "body",
+                        "category": "body",
+                        "selection_key": "body|Textoindependiente|Body Text",
+                        "style_id": "Textoindependiente",
+                        "style_name": "Body Text",
+                        "display_name": "Body Text",
+                        "style_type": "paragraph",
+                    },
+                    "heading_1": {
+                        "slot_name": "heading_1",
+                        "category": "headings",
+                        "selection_key": "headings|Ttulo1|Heading 1",
+                        "style_id": "Ttulo1",
+                        "style_name": "Heading 1",
+                        "display_name": "Heading 1",
+                        "style_type": "paragraph",
+                    },
+                }
+                template_service.save_template(kernel_id, docx_bytes, extracted)
+
+                updated_body = template_service.update_template_style(
+                    kernel_id,
+                    "Body Text",
+                    {
+                        "style_id": "Textoindependiente",
+                        "font_name": "Arial",
+                        "font_size_pt": 13,
+                    },
+                )
+                updated_heading = template_service.update_template_style(
+                    kernel_id,
+                    "Heading 1",
+                    {
+                        "style_id": "Ttulo1",
+                        "font_name": "Georgia",
+                        "font_size_pt": 22,
+                        "color_rgb": "CC0000",
+                    },
+                )
+
+                template_docx_path = template_service.get_template_docx_path(kernel_id)
+                namespace = {}
+                session = get_session(namespace)
+                session.set_template_path(template_docx_path)
+                session.set_template_required_style_defaults(
+                    updated_heading.get(template_service.BUILDER_REQUIRED_STYLE_DEFAULTS_KEY) or {}
+                )
+                session.set_template_semantic_style_slots(
+                    updated_heading.get(template_service.SEMANTIC_STYLE_SLOTS_KEY) or {}
+                )
+                session.reset(hard=True)
+
+                with build_doc(order=8, namespace=namespace, block_id="cell-spanish-slots") as builder:
+                    builder.heading("Heading marker", level=1)
+                    builder.text("Body marker")
+
+                exported_bytes = base64.b64decode(session.export_docx_base64())
+                exported_path = self._template_path("spanish-style-ids-exported.docx")
+                Path(exported_path).write_bytes(exported_bytes)
+
+                paragraph_style_ids = _read_paragraph_style_ids(exported_bytes)
+                self.assertIn("Ttulo1", paragraph_style_ids)
+                self.assertIn("Textoindependiente", paragraph_style_ids)
+
+                body_rfonts = _read_style_rfonts_attrs(
+                    exported_path,
+                    "Body Text",
+                    "Textoindependiente",
+                )
+                heading_rfonts = _read_style_rfonts_attrs(
+                    exported_path,
+                    "Heading 1",
+                    "Ttulo1",
+                )
+                self.assertEqual(body_rfonts.get("ascii"), "Arial")
+                self.assertEqual(body_rfonts.get("hAnsi"), "Arial")
+                self.assertEqual(body_rfonts.get("cs"), "Arial")
+                self.assertEqual(body_rfonts.get("eastAsia"), "Arial")
+                self.assertEqual(heading_rfonts.get("ascii"), "Georgia")
+                self.assertEqual(
+                    (updated_body.get(template_service.SEMANTIC_STYLE_SLOTS_KEY) or {}).get("body", {}).get("style_id"),
+                    "Textoindependiente",
                 )
             finally:
                 template_service.TEMPLATE_DIR = original_template_dir

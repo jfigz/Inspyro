@@ -1,6 +1,26 @@
 ﻿# Changelog 01 - document-generation-docx
 
-> **Última actualización:** 2026-05-02
+> **Última actualización:** 2026-05-06
+
+---
+
+## 2026-05-06 - `doc_finalize` público y metadata visual trazable
+
+1. `doc_finalize()` queda exportado desde `docx_builder`, reexportado por `math_to_docx` e inyectado en el preámbulo notebook para que las celdas finales de revisión documental usen la API pública esperada.
+2. `docx_render_cache.py` agrega `local_path` a recursos/páginas renderizadas y `pages_dir` al manifest visual, validando todo bajo `INSPYRO_DOCX_RENDER_CACHE_DIR` para evitar inferencias ambiguas de rutas.
+3. Las pruebas de calidad DOCX fijan que `render_manifest`, `render_page` y `render_all_pages` entreguen metadata local coherente sin inlinear PNG/base64.
+
+**Archivos:** `backend/librerias_propias/docx_builder/__init__.py`, `backend/librerias_propias/math_to_docx.py`, `backend/app/services/notebook_service.py`, `backend/app/services/docx_render_cache.py`, `backend/tests/test_docx_empty_handling.py`, `backend/tests/test_docx_quality.py`, `docs/modules/01-document-generation-docx.md`, `docs/changelog/01-document-generation-docx.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-04 - Runtime DOCX con plantilla sin body fantasma
+
+1. `DocxSession` limpia el body de la plantilla al cargarla como base runtime, preservando `sectPr`, headers, footers y estilos para que el informe generado no quede mezclado con el contenido de la plantilla.
+2. Los helpers públicos de `math_to_docx` vuelven a operar sobre el namespace de la celda notebook llamadora; `doc_reset(hard=True)` ya no desplaza el tracking de bloques a la sesión del módulo wrapper.
+3. `_fast_rebuild_document()` conserva el cuerpo actual si no puede restaurar bloques con contenido, evitando que una falla de rehidratación termine exportando un DOCX vacío.
+
+**Archivos:** `backend/librerias_propias/docx_builder/session.py`, `backend/librerias_propias/math_to_docx.py`, `backend/tests/test_docx_empty_handling.py`, `docs/modules/01-document-generation-docx.md`, `docs/changelog/01-document-generation-docx.md`, `docs/llm-index.yaml`
 
 ---
 

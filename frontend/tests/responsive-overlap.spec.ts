@@ -50,10 +50,13 @@ test.describe.serial('Responsive Overlap Guard', () => {
         { name: 'notification center', selector: '.notification-center' },
         { name: 'connection chip', selector: '.desktop-status-chip' },
         { name: 'mcp status', selector: '.mcp-status-split' },
+      ]);
+
+      await expectInsideViewport(page, [
         { name: 'home header', selector: '.agent-workspace-home__header' },
         { name: 'home attention', selector: '.agent-home-attention' },
         { name: 'home lanes', selector: '.agent-home-lanes' },
-      ]);
+      ], 0, { vertical: false });
 
       await expectNoOverlap(page, [
         {

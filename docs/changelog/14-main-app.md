@@ -1,6 +1,47 @@
 ﻿# Changelog 14 - main-app
 
-> **Última actualización:** 2026-05-03
+> **Última actualización:** 2026-05-08
+
+---
+
+## 2026-05-08 - Cobertura Home/UI en `template-binding-bank`
+
+1. `frontend/tests/template-binding-bank.spec.ts` valida desde navegador real la acción `Anidar plantilla`, el estado `Vinculada`, el warning por JSON perdido, la hidratación sin dirty falso y el Home summary priorizando el binding del `.ipynb`.
+2. `agent_debug.ps1 template-binding-bank` queda como comando dedicado para repetir esa campaña junto con el subset backend/frontend del binding JSON.
+
+**Archivos:** `frontend/tests/template-binding-bank.spec.ts`, `agent_debug.ps1`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`
+
+---
+
+## 2026-05-08 - UI notebook-first para plantilla JSON vinculada
+
+1. `App.js` guarda `templateBinding` dentro de cada sesión notebook y lo hidrata desde `notebook_created`, `notebook_loaded`, `notebook_attached` y ACKs `template_*`.
+2. `TemplateEditorContainer` agrega la acción `Anidar plantilla`, muestra estados `Vinculada`, `Perdida` o `Sin plantilla vinculada`, y advierte cuando el JSON persistido falta o no se puede aplicar.
+3. Home prioriza el binding del `.ipynb` por sobre el índice legacy `.inspyro/templates/index.json` y expone migración a JSON para entradas heredadas.
+4. La hidratación del estado runtime no marca dirty falso: el snapshot persistible del notebook se usa para parchear metadata y el estado de sesión se actualiza desde ACKs autoritativos.
+
+**Archivos:** `frontend/src/App.js`, `frontend/src/hooks/useTemplateMessageHandler.js`, `frontend/src/components/VisualizationPanel.js`, `frontend/src/components/DocxViewer.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/TemplateEditor.css`, `frontend/src/App.test.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`, `docs/architecture/feature-threads.md`, `docs/architecture/system-context.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
+
+---
+
+## 2026-05-05 - Home/MCP evita progreso fantasma y recargas dirty
+
+1. `App.js` solo muestra progreso notebook/code en Home para runtimes activos, fallidos o ligados al convertidor compartido; filas `completed`/`idle` con `progress.percent=0` ya no desplazan la actividad MCP.
+2. Home se refresca silenciosamente ante `mcp_activity_event`, manteniendo el carril `Ejecutar` sincronizado con clientes y runs de agentes.
+3. `useMcpActivity`, `useMcpMirror` y `useFileSystem` comparan rutas dirty normalizadas y consultan referencias actuales antes de aplicar mirrors o eventos del watcher, bloqueando overwrite de contenido local sin guardar.
+4. Las regresiones cubren dirty mirror, selección estable de workspace, MCP UI, responsive bounds y Home live.
+
+**Archivos:** `frontend/src/App.js`, `frontend/src/hooks/useMcpActivity.js`, `frontend/src/hooks/useMcpActivity.test.js`, `frontend/src/hooks/useMcpMirror.js`, `frontend/src/hooks/useMcpMirror.test.js`, `frontend/src/hooks/useFileSystem.js`, `frontend/tests/helpers/ui.ts`, `frontend/tests/helpers/layout.ts`, `frontend/tests/mcp-ui.spec.ts`, `frontend/tests/notebook-parallel.spec.ts`, `frontend/tests/responsive-overlap.spec.ts`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`
+
+---
+
+## 2026-05-04 - Home separa notebook y mirror DOCX de plantilla
+
+1. `App.js` agrega `resolveHomeTemplateOpenPaths()` para resolver la `.ipynb` origen y el mirror `.docx` de una entrada de plantilla sin confundir ambos roles.
+2. `handleOpenTemplateFromHome()` abre el notebook antes de tokenizar el mirror por `POST /api/templates/tokenize`, evitando que `Abrir plantilla` use el lector interno de archivos sobre un DOCX binario.
+3. Si falta notebook origen verificable o falla la tokenización, el shell degrada con advertencia y no muestra un modal de template falsamente vacío.
+
+**Archivos:** `frontend/src/App.js`, `frontend/src/App.test.js`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
 
 ---
 

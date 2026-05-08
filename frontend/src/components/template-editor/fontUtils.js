@@ -209,7 +209,7 @@ const normalizeFontCatalogKey = (value) => {
   return fontName ? fontName.trim().toLowerCase() : '';
 };
 
-export const getFontAvailabilityInfo = (fontName, systemFontCatalog = []) => {
+export const getFontAvailabilityInfo = (fontName, systemFontCatalog = [], templateDetails = null) => {
   const normalizedName = String(fontName || '').trim();
   if (!normalizedName) {
     return { available: null, reason: 'empty' };
@@ -217,24 +217,48 @@ export const getFontAvailabilityInfo = (fontName, systemFontCatalog = []) => {
 
   const systemKey = normalizeFontCatalogKey(normalizedName);
   const hasSystemCatalog = Array.isArray(systemFontCatalog) && systemFontCatalog.length > 0;
+  const systemSet = new Set(
+    hasSystemCatalog
+      ? systemFontCatalog.map(normalizeFontCatalogKey).filter(Boolean)
+      : []
+  );
+  const findFallback = (catalog = null) => {
+    const fonts = catalog?.font_table?.fonts;
+    if (!Array.isArray(fonts)) return null;
+    const entry = fonts.find((fontEntry) => (
+      normalizeFontCatalogKey(fontEntry?.name) === systemKey
+    ));
+    const fallbackName = entry?.alt_name || entry?.altName || entry?.fallback || '';
+    const normalizedFallback = normalizeFontCatalogKey(fallbackName);
+    if (!normalizedFallback) return null;
+    return {
+      fallback_font_name: String(fallbackName).trim(),
+      fallback_available: hasSystemCatalog ? systemSet.has(normalizedFallback) : null,
+    };
+  };
+
+  const fallbackInfo = findFallback(templateDetails);
   if (hasSystemCatalog) {
-    const systemSet = new Set(systemFontCatalog.map(normalizeFontCatalogKey).filter(Boolean));
     if (systemSet.has(systemKey)) {
       return { available: true, reason: 'system_catalog' };
     }
-    return { available: false, reason: 'system_catalog' };
+    return { available: false, reason: 'system_catalog', ...(fallbackInfo || {}) };
   }
 
   try {
     if (typeof document !== 'undefined' && document.fonts?.check) {
       const available = document.fonts.check(`12px "${normalizedName}"`);
-      return { available: Boolean(available), reason: 'browser_fonts_api' };
+      if (fallbackInfo?.fallback_font_name && fallbackInfo.fallback_available === null) {
+        const fallbackAvailable = document.fonts.check(`12px "${fallbackInfo.fallback_font_name}"`);
+        fallbackInfo.fallback_available = Boolean(fallbackAvailable);
+      }
+      return { available: Boolean(available), reason: 'browser_fonts_api', ...(fallbackInfo || {}) };
     }
   } catch (error) {
     // Ignore browser font API failures and fall back to catalog-only behavior.
   }
 
-  return { available: null, reason: 'unknown' };
+  return { available: null, reason: 'unknown', ...(fallbackInfo || {}) };
 };
 
 export const formatFontSourceLabel = (fontSource) => {

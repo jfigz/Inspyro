@@ -4,7 +4,7 @@
 
 > **Ubicacion:** `backend/mcp_server/`
 
-> **Última actualización:** 2026-04-28
+> **Última actualización:** 2026-05-08
 
 > **Changelog:** `docs/changelog/19-mcp-server.md`
 
@@ -14,12 +14,42 @@
 
 Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Context Protocol). El servidor corre localmente, consume el backend existente via REST + WebSocket y actua como capa adaptadora, no como nueva fuente de verdad funcional.
 
+## Binding de template JSON notebook-first (2026-05-08)
+
+- Se agrega `bind_template_to_notebook(kernel_id, path?, template_json_path?)` como tool authoring. La tool llama `POST /api/templates/bind`, escribe el paquete JSON portable junto al `.ipynb`, parchea metadata y devuelve `template_binding`.
+- `notebook_load` devuelve el `template_binding` reportado por backend; si el JSON vinculado falta o está corrupto, la tool sigue entregando el kernel listo y deja el estado `missing`/`error` en la respuesta.
+- `notebook_create` envía el path final del `.ipynb` al backend para permitir heredar el default opcional de workspace (`.inspyro/templates/default.inspyro-template.json`) antes de guardar el archivo real.
+- Las respuestas MCP de `upload_template`, `get_template_info` y `update_template_style` propagan `template_binding` cuando el backend autoexporta el JSON vinculado.
+- El banco `.\agent_debug.ps1 template-binding-bank` arranca MCP stateful desde el harness Playwright y valida `bind_template_to_notebook`, `notebook_load` con binding válido/missing, mutación de estilo y ejecución sin bloqueo cuando el JSON falta.
+
+## Notebook-first endurecido (2026-05-06)
+
+- Las tools notebook-first piden el bridge con `websocket_scope="notebook"`; el endpoint preferido es `/ws/notebook` y `/ws` queda solo como fallback de compatibilidad observable.
+- `notebook_sync_cells`, guardado, listado, lectura, búsqueda, edición y lifecycle resuelven `session_id` al inicio y propagan ese bucket a `session_state`, bridge y locks. En modo `stateless-http` los workflows con notebook vivo siguen rechazándose de forma explícita.
+- Las rutas relativas de notebooks en `list_cells`, `get_cell`, `find_in_notebook`, carga, guardado y sync se resuelven con el mismo resolver root-aware de archivos contra el workspace activo. `notebooks/demo.ipynb` apunta al workspace del usuario, no al repo de Inspyro.
+- Los notebooks escritos por MCP ya no persisten `cell_type="docx"`: exponen `type/cell_type="docx"` al agente, pero guardan `cell_type="code"` + `metadata.inspyro.cell_kind="docx"` y validan el payload con `nbformat` antes de llamar `/api/files/write`.
+- La clasificación legacy de celdas DOCX usa metadata `metadata.inspyro.cell_kind="docx"` como fuente primaria y un detector AST de señales documentales de alta confianza. Cálculos normales como `pd.DataFrame(...)` permanecen como `code`.
+- Los errores de fuente omitida ahora incluyen diagnóstico de sesión (`session_id` y notebooks conocidos), de modo que un `CELL_SOURCE_REQUIRED` apunte a pérdida de registro/session scope y no a una celda inexistente sin evidencia.
+
+### Recuperación operativa MCP
+
+- Ante `NOTEBOOK_SESSION_MISSING` o `CELL_SOURCE_REQUIRED`, usar `list_session_notebooks` y volver a `notebook_load`/`notebook_create` en la misma sesión antes de reintentar ejecución sin `source`.
+- Ante `INVALID_PERSISTED_NOTEBOOK`, no editar el `.ipynb` por filesystem genérico; re-sincronizar con `notebook_sync_cells` para que la capa común canonicalice y valide el archivo.
+- Ante `KERNEL_NOT_READY` después del retry automático, usar `reset_kernel` sobre el notebook registrado y repetir una sola corrida corta antes de relanzar el batch completo.
+- Ante pérdida WS o timeout RPC con ejecución posiblemente terminada, consultar `get_run_status`/artefactos por `execution_id` antes de reejecutar para evitar duplicar bloques DOCX.
+
+## Batch DOCX final por celdas documentales (2026-05-04)
+
+- `execute_all_cells` calcula las celdas exportables del lote y solo envía `emit_docx=true` para celdas `docx` o fuentes legacy que realmente usan la API documental.
+- Las celdas de cálculo intermedias ya no se instrumentan como bloques DOCX vacíos por el simple hecho de que el batch completo tenga informe; `skip_pdf` se ata a la última celda documental, no a la última celda runnable.
+- El cambio evita que un agente MCP reintroduzca bloques vacíos en el orden lógico del documento mientras ejecuta notebooks mixtos de cálculo + reporte.
+
 ## Celdas DOCX notebook-first (2026-04-28)
 
-- `notebook_create(cells=...)` y `notebook_sync_cells` aceptan `cell_type="docx"`; si una celda legacy llega como `code` pero usa APIs DOCX detectables, la normalización MCP puede migrarla a `docx`.
+- `notebook_create(cells=...)` y `notebook_sync_cells` aceptan `cell_type="docx"` como tipo lógico; si una celda legacy llega como `code` pero usa APIs DOCX detectables, la normalización MCP puede exponerla como `docx`.
 - `list_cells`, `get_cell` y `find_in_notebook` reportan `type: "docx"` para estas celdas, manteniendo `docx` como Python ejecutable dentro del notebook-first flow.
 - `execute_all_cells(include_docx=false)` omite celdas DOCX, devuelve `skipped_docx_cell_ids` y no fuerza `emit_docx`; `execute_cell(include_docx=false)` responde `status="skipped"` si la celda resuelta es DOCX.
-- El default sigue siendo `include_docx=true` para preservar el comportamiento de generación de informes. La detección `_should_emit_docx()` permanece como compatibilidad para notebooks legacy y fuentes sin metadata.
+- El default sigue siendo `include_docx=true` para preservar el comportamiento de generación de informes. La detección `_should_emit_docx()` permanece como compatibilidad para notebooks legacy y fuentes sin metadata, mientras la persistencia estándar vive en `metadata.inspyro.cell_kind`.
 
 ## Workbench DOCX compacto para agentes (2026-04-25)
 
@@ -27,6 +57,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 - Se agregan tools documentales deliberadamente pocas: `run_document_workbench`, `compare_document_versions`, `manage_document_review` y `prepare_document_delivery`. Todas devuelven summaries limitados y handles `resource_uri`; los recursos visuales o variantes se abren/exportan solo si el agente lo decide.
 - `run_document_workbench(operation, ...)` cubre operaciones tipadas del backend Workbench (`audit`, `render_manifest`, `render_page`, `render_all_pages`, `clear_render_cache`, `comments_*`, `redlines_*`, `fields_*`, `content_controls_*`, `redact`, `protect`, `diff`, `prepare_delivery`) con `detail` y `max_findings` para controlar contexto.
 - Las operaciones visuales MCP retornan solo estado de cache, `visual`, `rendered_pages` y handles `/api/docx/render/resource`; nunca abren PNG/DOCX/base64 automáticamente.
+- Los manifests/renders visuales pueden incluir `pages_dir` y `local_path` por página/recurso, validados bajo `INSPYRO_DOCX_RENDER_CACHE_DIR`, para evitar inferir rutas a partir de `cache_dir + name`; `resource_uri` sigue siendo el contrato principal.
 - `prepare_document_delivery` genera una variante publicable limpia, puede exportarla a una ruta permitida por roots MCP, adjunta un `render_manifest` compacto si existe y nunca reemplaza el artefacto original.
 - Cuando una tool MCP necesita descargar un resource Workbench, solo desreferencia `resource_uri` de `/api/docx/workbench/resource` con `workbench_id` y `name`; rutas o parámetros inesperados fallan antes de hacer fetch REST.
 - El flujo recomendado para agentes queda: generar DOCX -> `check_document_quality(run=true, profile="agent")` -> corregir notebook/template -> `prepare_document_delivery` al final.
@@ -36,6 +67,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 - `authoring` suma `check_document_quality` como tool textual y bajo demanda para revisar un DOCX sin devolver DOCX, PNG, XML raw ni base64. Con `run=false` lee solo el summary cacheado de `/api/docx/quality`; con `run=true` ejecuta `/api/docx/quality/run`.
 
 - La resolución de artefacto sigue una prioridad explícita para no inflar contexto ni abrir binarios: `artifact_id`, artefacto registrado por `kernel_id + execution_id`, último DOCX del `kernel_id` y último DOCX por `source_path`.
+- `source_path` significa origen con historial DOCX de Inspyro, típicamente notebook/script. Si apunta a una copia `.docx` exportada existente sin historial, la tool responde `invalid_quality_selector` con una sugerencia accionable en vez de `missing_artifact` genérico.
 
 - La respuesta se normaliza para agentes con `quality_status`, `score`, `counts`, `sections`, `findings` limitados por `max_findings` y `truncated_findings`; `detail="compact"` omite findings, `detail="findings"` limita hallazgos y `detail="full"` sigue siendo textual/sanitizado.
 
@@ -119,7 +151,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 
 - `tools/call` con superficie publicada por perfiles:
 
-  - **Perfil por defecto `authoring`:** `get_system_info`, `get_health`, `list_component_profiles`, `set_component_profile`, `notebook_create`, `notebook_load`, `list_session_notebooks`, `notebook_sync_cells`, `notebook_save`, `execute_cell`, `execute_all_cells`, `get_kernel_status`, `get_run_status`, `cancel_run`, `resume_run`, `list_cells`, `get_cell`, `find_in_notebook`, `reset_kernel`, `interrupt_kernel`, `shutdown_kernel`, `close_session_notebook`, `get_variables`, `check_document_quality`, `run_document_workbench`, `compare_document_versions`, `manage_document_review`, `prepare_document_delivery`, `get_document_pdf`, `get_document_docx`, `export_clean_document_docx`, `export_document_pdf`, `export_document_docx`, `reconvert_pdf`, `upload_template`, `get_template_info`, `delete_template`, `update_template_style`, `convert_units`, `get_units_catalog`, `check_units_compatible`
+  - **Perfil por defecto `authoring`:** `get_system_info`, `get_health`, `list_component_profiles`, `set_component_profile`, `notebook_create`, `notebook_load`, `list_session_notebooks`, `notebook_sync_cells`, `notebook_save`, `execute_cell`, `execute_all_cells`, `get_kernel_status`, `get_run_status`, `cancel_run`, `resume_run`, `list_cells`, `get_cell`, `find_in_notebook`, `reset_kernel`, `interrupt_kernel`, `shutdown_kernel`, `close_session_notebook`, `get_variables`, `check_document_quality`, `run_document_workbench`, `compare_document_versions`, `manage_document_review`, `prepare_document_delivery`, `get_document_pdf`, `get_document_docx`, `export_clean_document_docx`, `export_document_pdf`, `export_document_docx`, `reconvert_pdf`, `upload_template`, `bind_template_to_notebook`, `get_template_info`, `delete_template`, `update_template_style`, `convert_units`, `get_units_catalog`, `check_units_compatible`
 
   - **Perfil `analysis`:** agrega `analyze_dependencies`, `analyze_impact`, `run_sensitivity`, `optimize_design`, `compare_scenarios`, `run_code_checks`
     - `analyze_impact` acepta `max_depth` y lo propaga al contrato WS para mantener el mismo límite visible que la UI.
@@ -174,7 +206,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 
 - Artefactos DOCX/PDF link-first por `token`, `ref`, `resource_uri`, `portable_resource_uri`, `resource_scope`, `hash` y `size_bytes`; el base64 queda opt-in (`inline_content=true`) y sujeto a umbral real.
 
-- Las tools notebook-first preservan tipos `code|markdown|docx`; para iteraciones de cálculo, `include_docx=false` evita ejecutar report cells sin limpiar `mdoc` ni descartar el último artefacto visible.
+- Las tools notebook-first preservan tipos lógicos `code|markdown|docx` hacia el agente; para iteraciones de cálculo, `include_docx=false` evita ejecutar report cells sin limpiar `mdoc` ni descartar el último artefacto visible.
 
 - Calidad/Workbench DOCX MCP es opt-in y textual por defecto: `check_document_quality` usa summaries cacheados o ejecuta auditoría bajo demanda, `run_document_workbench` ejecuta operaciones explícitas con summaries limitados, y `get_document_docx(include_quality=true)` solo adjunta cache compacto si ya existe.
 
@@ -361,6 +393,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 - Smoke reproducible via `./agent_debug.ps1 mcp-smoke` para validar `initialize`, conteos/listados MCP, `resources/templates/list`, annotations clave, resources/prompts obligatorios, `manifest`, `completion/complete` y `get_health` end-to-end.
 
 - Torture probe reproducible via `./agent_debug.ps1 mcp-torture` para validar el flujo notebook-first exhaustivo contra el servidor MCP live, con `report.json` y `report.md` generados en un workspace temporal.
+- Banco live `./agent_debug.ps1 template-binding-bank` para validar la integración MCP del binding JSON por notebook y dejar evidencia en `output/template-binding-bank/<run-id>/summary.{json,md}`.
 
 ## Compatibilidad de transporte y DX
 
@@ -377,6 +410,8 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 6. `./agent_debug.ps1 mcp-smoke` ejecuta una validacion reproducible del protocolo MCP real contra `:8100`.
 
 7. `./agent_debug.ps1 mcp-torture` ejecuta una campaña exhaustiva notebook-first contra el MCP live y deja evidencia verificable en disco.
+
+8. `./agent_debug.ps1 template-binding-bank` ejecuta la campaña live del binding JSON por notebook, incluyendo llamadas MCP stateful y reportes bajo `output/template-binding-bank/`.
 
 ## Archivos fuente y puntos de entrada
 
@@ -443,6 +478,8 @@ Puntos de entrada principales:
 - `./agent_debug.ps1 mcp-smoke`
 
 - `./agent_debug.ps1 mcp-torture`
+
+- `./agent_debug.ps1 template-binding-bank`
 
 ## Resumen de cambios recientes
 

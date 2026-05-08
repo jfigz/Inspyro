@@ -25,6 +25,8 @@ from app.routers.notebook_common import (
     _shutdown_kernel_resources,
     _untrack_kernel_for_connection,
 )
+from app.services import template_binding
+from app.services.notebook_service import get_kernel_docx_source
 
 async def handle_notebook_cancel_execution(message: dict, websocket: WebSocket):
     kernel_id = message.get("kernel_id")
@@ -95,6 +97,7 @@ async def handle_notebook_reset_kernel(message: dict, websocket: WebSocket):
         
         # Restore template if one exists for this kernel
         template_path = template_storage.get_template_docx_path(kernel_id)
+        template_binding_status = template_binding.get_kernel_template_binding_status(kernel_id)
         if template_path:
             try:
                 template_info = template_storage.get_template(kernel_id) or {}
@@ -102,15 +105,24 @@ async def handle_notebook_reset_kernel(message: dict, websocket: WebSocket):
                     template_path,
                     template_info.get(template_service.TABLE_STYLE_RUNTIME_DEFAULTS_KEY),
                     template_info.get(template_service.BUILDER_REQUIRED_STYLE_DEFAULTS_KEY),
+                    template_info.get(template_service.SEMANTIC_STYLE_SLOTS_KEY),
                 )
                 await _execute_kernel_code_safely(kernel_id, set_template_code)
             except Exception as e:
                 logger.warning("[Template] Could not restore template after restart: %s", e)
+        elif template_binding_status and template_binding_status.get("status") not in {"none", "missing"}:
+            source_info = get_kernel_docx_source(kernel_id)
+            template_binding_status = await template_binding.apply_notebook_template_binding_to_kernel(
+                kernel_id=kernel_id,
+                notebook_path=source_info.get("source_path"),
+                notebook=None,
+            )
 
         await manager.send_personal_message(
             {
                 "type": "notebook_kernel_reset",
                 "kernel_id": kernel_id,
+                "template_binding": template_binding_status,
                 "request_id": request_id,
             },
             websocket,

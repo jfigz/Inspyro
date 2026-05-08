@@ -64,16 +64,23 @@ export const expectInsideViewport = async (
   page: Page,
   selectors: LayoutSelector[],
   margin = 0,
+  options: { horizontal?: boolean; vertical?: boolean } = {},
 ) => {
   const viewport = page.viewportSize();
   expect(viewport).not.toBeNull();
   const rects = await readRects(page, selectors);
+  const checkHorizontal = options.horizontal !== false;
+  const checkVertical = options.vertical !== false;
 
   for (const rect of rects) {
-    expect(rect.x, `${rect.name} left edge is outside viewport`).toBeGreaterThanOrEqual(margin);
-    expect(rect.y, `${rect.name} top edge is outside viewport`).toBeGreaterThanOrEqual(margin);
-    expect(rect.right, `${rect.name} right edge is outside viewport`).toBeLessThanOrEqual((viewport?.width || 0) - margin + 0.5);
-    expect(rect.bottom, `${rect.name} bottom edge is outside viewport`).toBeLessThanOrEqual((viewport?.height || 0) - margin + 0.5);
+    if (checkHorizontal) {
+      expect(rect.x, `${rect.name} left edge is outside viewport`).toBeGreaterThanOrEqual(margin);
+      expect(rect.right, `${rect.name} right edge is outside viewport`).toBeLessThanOrEqual((viewport?.width || 0) - margin + 0.5);
+    }
+    if (checkVertical) {
+      expect(rect.y, `${rect.name} top edge is outside viewport`).toBeGreaterThanOrEqual(margin);
+      expect(rect.bottom, `${rect.name} bottom edge is outside viewport`).toBeLessThanOrEqual((viewport?.height || 0) - margin + 0.5);
+    }
   }
 };
 

@@ -5,6 +5,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.routers import notebook_execution
+from app.services.notebook_cell_kinds import canonicalize_notebook_for_persistence
 
 
 def test_ensure_notebook_cell_ids_preserves_existing_ids_and_backfills_metadata():
@@ -63,7 +64,7 @@ def test_ensure_notebook_cell_ids_generates_missing_ids_once():
     assert result["cells"][1]["metadata"]["inspyro_id"] == generated_ids[1]
 
 
-def test_ensure_notebook_cell_ids_preserves_docx_cell_type():
+def test_ensure_notebook_cell_ids_exposes_legacy_docx_cell_type_as_logical_docx():
     notebook_payload = {
         "cells": [
             {
@@ -83,6 +84,7 @@ def test_ensure_notebook_cell_ids_preserves_docx_cell_type():
     assert result["cells"][0]["cell_type"] == "docx"
     assert result["cells"][0]["id"] == "cell-docx"
     assert result["cells"][0]["metadata"]["inspyro_id"] == "cell-docx"
+    assert result["cells"][0]["metadata"]["inspyro"]["cell_kind"] == "docx"
 
 
 def test_ensure_notebook_cell_ids_migrates_legacy_docx_source_to_docx_type():
@@ -103,3 +105,29 @@ def test_ensure_notebook_cell_ids_migrates_legacy_docx_source_to_docx_type():
     result = notebook_execution._ensure_notebook_cell_ids(notebook_payload)
 
     assert result["cells"][0]["cell_type"] == "docx"
+    assert result["cells"][0]["metadata"]["inspyro"]["cell_kind"] == "docx"
+
+
+def test_canonicalize_notebook_for_persistence_migrates_docx_cells_to_standard_nbformat():
+    notebook_payload = {
+        "cells": [
+            {
+                "id": "cell-docx",
+                "cell_type": "docx",
+                "source": ["with build_doc() as doc:\n", "    doc.text('x')"],
+                "metadata": {"inspyro_id": "cell-docx"},
+                "outputs": [],
+                "execution_count": None,
+            },
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+    result = canonicalize_notebook_for_persistence(notebook_payload)
+
+    assert result["cells"][0]["cell_type"] == "code"
+    assert result["cells"][0]["metadata"]["inspyro"]["cell_kind"] == "docx"
+    assert result["cells"][0]["outputs"] == []
+    assert result["cells"][0]["execution_count"] is None

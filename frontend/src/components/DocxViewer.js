@@ -505,6 +505,8 @@ const buildTemplateModalIntent = (request = null) => {
     persisted: Boolean(
       entry?.template_token
       || entry?.templateToken
+      || entry?.template_json_path
+      || entry?.templateJsonPath
       || entry?.template_mirror_path
       || entry?.templateMirrorPath
     ),
@@ -646,8 +648,10 @@ const DocxViewer = ({
   docxRenderStatus = null, docxRenderPageCount = null, docxRenderCachedPages = null, docxRenderRenderer = null,
   sourcePath = null, sourceKind = null, pdfBase64, pdfRefUrl, pdfHash, pdfConversionError, pdfAttempted, pdfConversionStdout,
   pdfConversionStderr, pdfConversionMs, conversionStatus, documentPipelineStatus = null, pdfServiceStatus = null, converterUsed, wordError, onClearDocx,
-  onRetryPdf, onStatusMessage, kernelId = null, sendMessage = null, lastMessage = null, templateInfo = null,
-  onTemplateChange = null, onTemplateUpload = null, onRequestKernelStart = null, onTemplateOpenHandled = null, onNavigateToCode = null, isVisible = true,
+  onRetryPdf, onStatusMessage, kernelId = null, sendMessage = null, lastMessage = null,
+  templateSendMessage = null, templateLastMessage = null, templateInfo = null,
+  templateBinding = null,
+  onTemplateChange = null, onTemplateUpload = null, onTemplateBind = null, onRequestKernelStart = null, onTemplateOpenHandled = null, onNavigateToCode = null, isVisible = true,
   templateOpenRequest = null, qualityOpenRequest = null,
 }) => {
   const desktopApi = typeof window !== 'undefined' ? window.inspyroDesktop : null;
@@ -2380,7 +2384,7 @@ const DocxViewer = ({
               </>
             )}
         </div>
-        {showTemplateModal && <TemplateEditor templateInfo={templateInfo} kernelId={kernelId} sendMessage={sendMessage} lastMessage={lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
+        {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
       </div>
     );
   }
@@ -3031,7 +3035,7 @@ const DocxViewer = ({
         )}
       </div>
 
-      {showTemplateModal && <TemplateEditor templateInfo={templateInfo} kernelId={kernelId} sendMessage={sendMessage} lastMessage={lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
+      {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
     </div>
   );
 };
