@@ -1,6 +1,6 @@
 ﻿# Catálogo Canónico de Contratos (WS/REST)
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 
 > **Fuente canónica de entrada WS:** `backend/main.py` (`websocket_endpoint`, `notebook_websocket_endpoint`).
 
@@ -252,7 +252,7 @@ Notas de payload:
 
 - Mutaciones de template (`template_upload`, `template_delete`, `template_update_style`, `template_update_document_defaults`, `template_update_semantic_slots`, `template_create_style_from_table`, `template_apply_table_format`) aceptan `request_id` opcional y lo reflejan en respuestas `success/error`.
 
-- `template_update_style.updates` soporta formato dual: plano legacy (`font_size_pt`, `table_border_color`, etc.) y bloques aditivos (`font`, `paragraph`, `table`, `advanced_props`) normalizados en backend. Desde 2026-05-08 acepta además `word_style` como contenedor práctico de paridad Word (`metadata`, `visibility`, `font`/`run`, `paragraph`, `list`, `table`, `raw`/`advanced_props`) y `style_visibility` como alias top-level de visibilidad/galería (`hidden`, `semiHidden`, `qFormat`, `uiPriority`, `unhideWhenUsed`).
+- `template_update_style.updates` soporta formato dual: plano legacy (`font_size_pt`, `table_border_color`, etc.) y bloques aditivos (`font`, `paragraph`, `table`, `advanced_props`) normalizados en backend. Desde 2026-05-09 acepta además `word_style` como contenedor práctico de paridad Word (`metadata`, `visibility`, `font`/`run`, `paragraph`, `list`, `table`, `raw`/`advanced_props`) y `style_visibility` como alias top-level de visibilidad/galería (`hidden`, `semiHidden`, `qFormat`, `unhideWhenUsed`). `metadata` puede transportar `aliases`, `locked`, `auto_redefine` y refs de estilo; `paragraph` puede transportar `tabs`, `borders` (`pBdr`) y `shading` (`shd`). `advanced_props` raw se valida antes de escribir y puede fallar con `invalid_advanced_props.*`.
 
 - `template_update_document_defaults.updates` separa `font` y `paragraph`; backend materializa `w:docDefaults/w:rPrDefault/w:rPr` y `w:docDefaults/w:pPrDefault/w:pPr` en `styles.xml`, removiendo nodos/atributos conflictivos cuando un campo global se limpia para reactivar herencia de Word/theme. El campo aditivo `word_defaults` puede transportar la misma intención como `{ run|font, paragraph }` para clientes Word-complete.
 
@@ -356,7 +356,7 @@ Notas de payload:
 
 Notas de payload saliente:
 
-- `template_uploaded`, `template_info`, `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created` y `template_format_applied` pueden incluir metadata aditiva de fuentes/defaults del template: `default_font`, `default_font_source`, `font_catalog`, `system_font_catalog`, `builder_required_style_defaults`, `document_defaults` (`font`, `paragraph`, `font_source`, `paragraph_source`), `style_browser` (`categories`, `category_order`, `auto_selected`, `counts`) y `semantic_style_slots` como contrato Word-first persistido; cada estilo navegable puede exponer `selection_key`, `xml_font`, `xml_font_source`, `resolved_font`, `resolved_font_source`, alias `font_source`, `style_visibility` y `word_style` (`metadata`, `visibility`, `font`, `paragraph`, `list`, `table`, `raw`) para explicar la procedencia efectiva y propiedades OOXML avanzadas sin romper clientes existentes.
+- `template_uploaded`, `template_info`, `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created` y `template_format_applied` pueden incluir metadata aditiva de fuentes/defaults del template: `default_font`, `default_font_source`, `font_catalog`, `system_font_catalog`, `builder_required_style_defaults`, `document_defaults` (`font`, `paragraph`, `font_source`, `paragraph_source`), `word_capabilities`, `style_browser` (`categories`, `category_order`, `auto_selected`, `counts`) y `semantic_style_slots` como contrato Word-first persistido; cada estilo navegable puede exponer `selection_key`, `xml_font`, `xml_font_source`, `resolved_font`, `resolved_font_source`, alias `font_source`, `style_visibility` y `word_style` (`metadata`, `visibility`, `font`, `paragraph`, `list`, `table`, `raw`) para explicar la procedencia efectiva y propiedades OOXML avanzadas sin romper clientes existentes.
 
 - `template_document_defaults_updated` devuelve el `template` completo actualizado para que el shell rehidrate `Documento (Global)` sin hacer un `template_get` extra y mantenga sincronizado `templateInfo`.
 
@@ -442,6 +442,12 @@ Notas de payload saliente:
 
 | POST | `/api/mcp/mirror-events` | `backend/app/routers/mcp_manager.py` |
 
+| GET | `/api/mcp/status` | `backend/app/routers/mcp_manager.py` |
+
+| POST | `/api/mcp/start` | `backend/app/routers/mcp_manager.py` |
+
+| POST | `/api/mcp/stop` | `backend/app/routers/mcp_manager.py` |
+
 | POST | `/api/mcp/restart` | `backend/app/routers/mcp_manager.py` |
 
 | GET | `/api/docx/download` | `backend/app/routers/docx.py` |
@@ -480,6 +486,10 @@ Notas de payload saliente:
 
 | POST | `/api/templates/bind` | `backend/app/routers/templates.py` |
 
+| POST | `/api/templates/sample-preview/render-word` | `backend/app/routers/templates.py` |
+
+| POST | `/api/templates/sample-preview/open-default` | `backend/app/routers/templates.py` |
+
 | POST | `/api/units/convert` | `backend/app/routers/units.py` |
 
 | GET | `/api/units/catalog` | `backend/app/routers/units.py` |
@@ -510,6 +520,10 @@ Notas REST:
 
 `POST /api/templates/bind` espera `{ kernel_id, notebook_path, notebook?, template_json_path? }`; exporta la plantilla activa como JSON portable `schema_version=1.1`, escribe por defecto `<notebook_stem>.inspyro-template.json` junto al `.ipynb`, parchea `metadata.inspyro.template_binding` con ruta relativa `path_base="notebook_dir"` y devuelve `{ binding, notebook, template_binding }`. El binding JSON del `.ipynb` es la fuente canónica; mirrors legacy bajo `<workspace>/.inspyro/templates/` quedan solo como fallback/migración.
 
+`POST /api/templates/sample-preview/render-word` espera `{ kernel_id?, preview_key, docx_base64, force_refresh? }` y renderiza con Word nativo el mismo DOCX de ejemplo que genera el frontend. Responde `{ preview_key, preview_pages[], converter_used, warnings[] }`, donde cada pagina incluye `{ page_index, width, height, png_base64 }`. Si Word no esta disponible o falla la conversion, responde warning no bloqueante con `preview_pages=[]`; el editor conserva el preview JS.
+
+`POST /api/templates/sample-preview/open-default` espera `{ filename?, docx_base64 }`, valida que el binario sea un DOCX ZIP valido, lo guarda en un directorio temporal seguro del estado de la app y delega apertura a la aplicacion por defecto del host. Devuelve `{ success, path, open_result }`.
+
 `GET /api/files/tree` se consume en modo lazy desde frontend (`depth=1` por defecto útil para explorer) y retorna metadata aditiva por nodo: `hasChildren`, `writable`, `hidden`, `symlink`, `modified`, `relativePath`.
 
 `GET /api/files/search` busca por nombre dentro del workspace/ruta solicitada y devuelve lista plana `{ path, name, relativePath, parentPath, isDirectory, extension, score, writable, hidden }`, ordenada por basename exacto/prefijo/subcadena/path.
@@ -528,6 +542,8 @@ Notas REST:
 
 `GET /api/mcp/activity` hidrata historial MCP reciente (`events`), runs activos (`active_runs`) y `active_count` para el shell frontend. Cuando la actividad viene correlacionada por heartbeat, esos eventos/runs también pueden transportar `client_id`, `client_label` y `transport`.
 
+`GET /api/mcp/status` devuelve estado del servicio MCP shell-owned (`status`, `pid`, `port`, `uptime_seconds`, `url`, `log_lines`) y agrega `configuration` como bloque aditivo para clientes universales. `configuration` incluye `http_endpoint`, `host`, `port`, `default_profile`, `recommended_mode="stateful-http"`, `streamable_http`, `stdio.command/args/cwd`, `backend.url`, `backend.ws_url`, `backend.notebook_ws_url`, `environment` y advertencias locales. La UI debe usar este bloque para presets de Codex, Claude, Cursor, VS Code o HTTP genérico; no debe asumir backend `:8000` en desktop empaquetado.
+
 `POST /api/mcp/activity/events` es uso interno del servidor MCP: registra actividad estructurada y emite `mcp_activity_event` al WS principal.
 
 `POST /api/mcp/mirror-events` es uso interno del servidor MCP: normaliza y emite `mcp_mirror_event` al WS principal para espejo UI granular.
@@ -541,6 +557,8 @@ Notas REST:
 `POST /api/docx/workbench/run` es el contrato unificado para operaciones DOCX nativas (`audit`, `render_manifest`, `render_page`, `render_all_pages`, `clear_render_cache`, `clean`, `prepare_delivery`, `comments_*`, `redlines_*`, `fields_*`, `redact`, `protect`, `content_controls_*`, `diff`). Persiste `summary.json`, resources y variantes junto al artefacto. `render_manifest` lee estado visual y handles cacheados, `render_page` rasteriza una página bajo demanda, `render_all_pages` prepara todas las páginas explícitamente y `clear_render_cache` borra solo derivados visuales. `GET /api/docx/workbench/result` devuelve el summary compacto; `GET /api/docx/workbench/resource` descarga resources/variantes Workbench; `GET /api/docx/render/resource` sirve PDFs/PNGs derivados por `render_id + name`; `GET /api/docx/diff` es atajo de comparación entre dos `artifact_id`.
 
 `POST /api/mcp/restart` envuelve `stop + start` del subprocess MCP shell-owned y limpia `active_runs` / `mcp_clients` efímeros antes de reiniciar.
+
+`POST /api/mcp/start` lanza el subprocess MCP HTTP local y hereda explícitamente `INSPYRO_BACKEND_URL`, `INSPYRO_BACKEND_WS_URL` e `INSPYRO_BACKEND_NOTEBOOK_WS_URL` desde el backend real antes de crear el proceso. `POST /api/mcp/stop` solo controla ese servicio HTTP local; clientes `stdio` externos lanzan su propio proceso MCP y no dependen de este ciclo.
 
 `POST /api/mcp/client-heartbeat` registra o refresca clientes MCP conectados con `client_id/session_id`, `client_label`, `transport`, `workspace_path`, `last_seen_at` y `status`; el home summary agrupa esos clientes y adjunta su actividad reciente por cliente.
 

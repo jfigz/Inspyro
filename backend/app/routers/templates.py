@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.security import is_path_safe
-from app.services import template_binding
+from app.services import template_binding, template_service
 from app.services.template_tokens import store_template_bytes
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
@@ -25,6 +26,18 @@ class TemplateBindRequest(BaseModel):
     notebook_path: str
     notebook: dict | None = None
     template_json_path: str | None = None
+
+
+class TemplateSamplePreviewRenderRequest(BaseModel):
+    kernel_id: str | None = None
+    preview_key: str
+    docx_base64: str
+    force_refresh: bool = False
+
+
+class TemplateSamplePreviewOpenRequest(BaseModel):
+    filename: str | None = None
+    docx_base64: str
 
 
 def _raise_template_binding_error(exc: template_binding.TemplateBindingError) -> None:
@@ -99,6 +112,43 @@ async def export_template(kernel_id: str = Query(..., min_length=1)):
         return template_binding.build_template_export_package(kernel_id)
     except template_binding.TemplateBindingError as exc:
         _raise_template_binding_error(exc)
+
+
+@router.post("/sample-preview/render-word")
+async def render_sample_preview_with_word(request_data: TemplateSamplePreviewRenderRequest):
+    try:
+        return await asyncio.to_thread(
+            template_service.render_sample_preview_docx_with_word,
+            request_data.kernel_id or "template-editor",
+            request_data.preview_key,
+            request_data.docx_base64,
+            request_data.force_refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc), "error_code": "invalid_sample_docx"}) from exc
+
+
+@router.post("/sample-preview/open-default")
+async def open_sample_preview_with_default_app(request_data: TemplateSamplePreviewOpenRequest):
+    try:
+        docx_path = await asyncio.to_thread(
+            template_service.save_sample_preview_docx,
+            request_data.filename or "template-preview.docx",
+            request_data.docx_base64,
+        )
+        open_result = await asyncio.to_thread(template_service.open_path_with_default_application, docx_path)
+        return {
+            "success": True,
+            "path": str(docx_path),
+            "open_result": open_result,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc), "error_code": "invalid_sample_docx"}) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": f"No se pudo abrir el DOCX de ejemplo: {exc}", "error_code": "open_default_failed"},
+        ) from exc
 
 
 @router.post("/bind")

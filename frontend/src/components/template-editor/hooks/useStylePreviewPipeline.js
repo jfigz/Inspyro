@@ -11,6 +11,7 @@ export const useStylePreviewPipeline = ({
   buildPreviewKey,
 }) => {
   const [previewImage, setPreviewImage] = useState(null);
+  const [previewImageKey, setPreviewImageKey] = useState(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const previewCacheRef = useRef(new Map());
   const previewRequestSeqRef = useRef(0);
@@ -52,8 +53,14 @@ export const useStylePreviewPipeline = ({
     }
     if (clearImage) {
       setPreviewImage(null);
+      setPreviewImageKey(null);
     }
   }, [cancelInFlightPreview]);
+
+  const setPreviewImageForKey = useCallback((previewKey, previewB64) => {
+    setPreviewImage(previewB64 || null);
+    setPreviewImageKey(previewB64 ? (previewKey || null) : null);
+  }, []);
 
   const cachePreview = useCallback((previewKey, previewB64) => {
     if (!previewKey || !previewB64) return;
@@ -151,7 +158,7 @@ export const useStylePreviewPipeline = ({
     if (!force) {
       const cached = getCachedPreview(previewKey);
       if (cached) {
-        setPreviewImage(cached);
+        setPreviewImageForKey(previewKey, cached);
         setIsPreviewLoading(false);
         return;
       }
@@ -187,7 +194,7 @@ export const useStylePreviewPipeline = ({
       sendPreview,
       immediate ? 0 : PREVIEW_DEBOUNCE_MS
     );
-  }, [cancelInFlightPreview, sendMessage, kernelId, normalizePreviewProps, buildPreviewKey, getCachedPreview, sendPreviewRequest]);
+  }, [cancelInFlightPreview, sendMessage, kernelId, normalizePreviewProps, buildPreviewKey, getCachedPreview, sendPreviewRequest, setPreviewImageForKey]);
 
   useEffect(() => () => {
     cancelInFlightPreview();
@@ -201,7 +208,9 @@ export const useStylePreviewPipeline = ({
 
   return {
     previewImage,
+    previewImageKey,
     setPreviewImage,
+    setPreviewImageForKey,
     isPreviewLoading,
     setIsPreviewLoading,
     previewInFlightRef,

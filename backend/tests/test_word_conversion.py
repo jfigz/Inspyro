@@ -3,7 +3,6 @@
 import base64
 import io
 import os
-import tempfile
 
 import pytest
 from docx import Document
@@ -26,41 +25,48 @@ def _run_word_com_diagnostic():
 
     import pythoncom
     import win32com.client
+    from app.services.pdf_converter import convert_docx_with_diagnostics
 
     docx_b64 = _make_docx_b64()
-    result = {"skipped": False, "pdf_created": False, "error": None}
+    result = {
+        "skipped": False,
+        "pdf_created": False,
+        "user_word_survived": False,
+        "converter_used": None,
+        "word_error": None,
+        "error": None,
+    }
 
     pythoncom.CoInitialize()
-    word_app = None
+    user_word_app = None
+    user_doc = None
     try:
-        word_app = win32com.client.Dispatch("Word.Application")
-        word_app.Visible = False
-        word_app.DisplayAlerts = 0
-        with tempfile.TemporaryDirectory() as tmp:
-            docx_path = os.path.join(tmp, "test.docx")
-            pdf_path = os.path.join(tmp, "test.pdf")
-            with open(docx_path, "wb") as file_obj:
-                file_obj.write(base64.b64decode(docx_b64))
+        user_word_app = win32com.client.DispatchEx("Word.Application")
+        user_word_app.Visible = False
+        user_word_app.DisplayAlerts = 0
+        user_doc = user_word_app.Documents.Add()
+        user_doc.Content.Text = "Controlled user Word document that Inspyro must not close."
+        user_doc.Saved = False
+        conversion = convert_docx_with_diagnostics(docx_b64, timeout_s=60)
+        result["pdf_created"] = bool(conversion.get("pdf_b64"))
+        result["converter_used"] = conversion.get("converter_used")
+        result["word_error"] = conversion.get("word_error")
 
-            doc = word_app.Documents.Open(os.path.abspath(docx_path), ReadOnly=True, AddToRecentFiles=False)
-            try:
-                doc.ExportAsFixedFormat(
-                    OutputFileName=os.path.abspath(pdf_path),
-                    ExportFormat=17,
-                    OpenAfterExport=False,
-                    OptimizeFor=0,
-                    CreateBookmarks=1,
-                    DocStructureTags=True,
-                )
-                result["pdf_created"] = os.path.exists(pdf_path)
-            finally:
-                doc.Close(SaveChanges=0)
+        try:
+            result["user_word_survived"] = bool(user_word_app.Documents.Count >= 1)
+        except Exception as exc:
+            result["error"] = f"user_word_closed_or_unreachable:{exc}"
     except Exception as exc:
         result["error"] = str(exc)
     finally:
-        if word_app is not None:
+        if user_doc is not None:
             try:
-                word_app.Quit()
+                user_doc.Close(SaveChanges=0)
+            except Exception:
+                pass
+        if user_word_app is not None:
+            try:
+                user_word_app.Quit(SaveChanges=0)
             except Exception:
                 pass
         pythoncom.CoUninitialize()
@@ -76,6 +82,7 @@ def test_word_com_manual() -> None:
     result = _run_word_com_diagnostic()
     assert result.get("error") in (None, "")
     assert result.get("pdf_created") is True
+    assert result.get("user_word_survived") is True
 
 
 if __name__ == "__main__":

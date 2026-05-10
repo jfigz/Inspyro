@@ -32,6 +32,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from app.services.docx_quality.content_controls import inspect_content_controls
+from app.services.template.word_complete import (
+    get_word_complete_capabilities,
+    validate_advanced_props_payload,
+)
 from app.services.workspace_service import get_app_storage_dir
 
 # File locking imports
@@ -1376,7 +1380,10 @@ def _apply_style_xml_updates(
     style_id: Optional[str],
     advanced_props: Dict[str, Any]
 ) -> Dict[str, Any]:
-    if not advanced_props or not isinstance(advanced_props, dict):
+    if not advanced_props:
+        return {}
+    validate_advanced_props_payload(advanced_props)
+    if not isinstance(advanced_props, dict):
         return {}
     try:
         with zipfile.ZipFile(docx_path, "r") as zin:
@@ -1495,6 +1502,105 @@ def _half_points(value: Any) -> Optional[str]:
         return None
 
 
+def _normalize_aliases(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, list):
+        aliases = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(aliases) if aliases else None
+    return str(value)
+
+
+def _split_aliases(value: Optional[str]) -> List[str]:
+    if value in (None, ""):
+        return []
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
+def _remove_ooxml_children(parent: ET.Element, tag: str) -> None:
+    for old in list(parent.findall(f"w:{tag}", DOCX_NS)):
+        parent.remove(old)
+
+
+def _append_paragraph_borders(parent: ET.Element, borders: Dict[str, Any]) -> None:
+    _remove_ooxml_children(parent, "pBdr")
+    if not isinstance(borders, dict) or not borders:
+        return
+
+    p_bdr = ET.SubElement(parent, _qn("w", "pBdr"))
+    added = False
+    side_order = ["top", "left", "bottom", "right", "between", "bar"]
+    for side in side_order + [key for key in borders.keys() if key not in side_order]:
+        raw_props = borders.get(side)
+        if not isinstance(raw_props, dict):
+            continue
+        style = _normalize_table_border_style(raw_props.get("style") if "style" in raw_props else raw_props.get("val"))
+        size = _border_size_to_ooxml(raw_props)
+        color = _normalize_ooxml_color(raw_props.get("color"))
+        space = raw_props.get("space")
+        if style is None and size is None and color is None and space in (None, ""):
+            continue
+        if style is None:
+            style = "single"
+        border = ET.SubElement(p_bdr, _qn("w", side))
+        border.set(_qn("w", "val"), style)
+        if size is not None:
+            border.set(_qn("w", "sz"), size)
+        if space not in (None, ""):
+            border.set(_qn("w", "space"), str(space))
+        if color is not None:
+            border.set(_qn("w", "color"), color)
+        for source_key, attr_name in (
+            ("theme_color", "themeColor"),
+            ("theme_tint", "themeTint"),
+            ("theme_shade", "themeShade"),
+        ):
+            if raw_props.get(source_key) not in (None, ""):
+                border.set(_qn("w", attr_name), str(raw_props.get(source_key)))
+        added = True
+
+    if not added:
+        parent.remove(p_bdr)
+
+
+def _apply_paragraph_shading(parent: ET.Element, shading: Dict[str, Any]) -> None:
+    _remove_ooxml_children(parent, "shd")
+    if not isinstance(shading, dict) or not shading:
+        return
+
+    shd = ET.SubElement(parent, _qn("w", "shd"))
+    attr_map = {
+        "val": "val",
+        "pattern": "val",
+        "fill": "fill",
+        "color": "color",
+        "theme_fill": "themeFill",
+        "theme_color": "themeColor",
+        "theme_fill_tint": "themeFillTint",
+        "theme_fill_shade": "themeFillShade",
+        "theme_tint": "themeTint",
+        "theme_shade": "themeShade",
+    }
+    has_attr = False
+    for key, attr_name in attr_map.items():
+        value = shading.get(key)
+        if value in (None, ""):
+            continue
+        if attr_name in {"fill", "color"}:
+            normalized = _normalize_ooxml_color(value)
+            if normalized is None and str(value).lower() == "auto":
+                normalized = "auto"
+            if normalized is None:
+                continue
+            value = normalized
+        shd.set(_qn("w", attr_name), str(value))
+        has_attr = True
+    if has_attr and shd.get(_qn("w", "val")) in (None, ""):
+        shd.set(_qn("w", "val"), "clear")
+    if not has_attr:
+        parent.remove(shd)
+
+
 def _apply_word_style_xml_updates(
     docx_path: Path,
     style_name: str,
@@ -1539,6 +1645,8 @@ def _apply_word_style_xml_updates(
         ):
             if key in metadata:
                 _set_style_val_child(style_elem, tag, metadata.get(key))
+        if "aliases" in metadata:
+            _set_style_val_child(style_elem, "aliases", _normalize_aliases(metadata.get("aliases")))
         for key, tag in (
             ("hidden", "hidden"),
             ("semi_hidden", "semiHidden"),
@@ -1551,6 +1659,18 @@ def _apply_word_style_xml_updates(
             if key in visibility:
                 _set_style_flag_child(style_elem, tag, visibility.get(key))
             elif key in metadata:
+                _set_style_flag_child(style_elem, tag, metadata.get(key))
+        for key, tag in (
+            ("locked", "locked"),
+            ("auto_redefine", "autoRedefine"),
+            ("autoRedefine", "autoRedefine"),
+            ("personal", "personal"),
+            ("personal_compose", "personalCompose"),
+            ("personalCompose", "personalCompose"),
+            ("personal_reply", "personalReply"),
+            ("personalReply", "personalReply"),
+        ):
+            if key in metadata:
                 _set_style_flag_child(style_elem, tag, metadata.get(key))
 
         font_block: Dict[str, Any] = {}
@@ -1700,6 +1820,10 @@ def _apply_word_style_xml_updates(
                         tab_elem.set(_qn("w", "val"), str(tab_info.get("val") or "left"))
                         if tab_info.get("leader"):
                             tab_elem.set(_qn("w", "leader"), str(tab_info.get("leader")))
+            if "borders" in paragraph_block:
+                _append_paragraph_borders(p_pr, paragraph_block.get("borders") or {})
+            if "shading" in paragraph_block:
+                _apply_paragraph_shading(p_pr, paragraph_block.get("shading") or {})
 
         updated_xml = _serialize_ooxml_part(
             styles_root,
@@ -2281,10 +2405,13 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
     style_id = style_elem.get(_qn("w", "styleId"))
     style_type = style_elem.get(_qn("w", "type"))
     display_name = _find_val(style_elem, "w:name")
+    aliases_raw = _find_val(style_elem, "w:aliases")
+    aliases = _split_aliases(aliases_raw)
     based_on = _find_val(style_elem, "w:basedOn")
     next_style = _find_val(style_elem, "w:next")
     link_style = _find_val(style_elem, "w:link")
     ui_priority = _find_val(style_elem, "w:uiPriority")
+    rsid = _find_val(style_elem, "w:rsid")
     outline_val = None
     outline_elem = style_elem.find("w:pPr/w:outlineLvl", DOCX_NS)
     if outline_elem is not None:
@@ -2316,6 +2443,7 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
     return {
         "style_id": style_id,
         "display_name": display_name,
+        "aliases": aliases,
         "type": style_type,
         "based_on": based_on,
         "next": next_style,
@@ -2323,6 +2451,12 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
         "ui_priority": int(ui_priority) if ui_priority and ui_priority.isdigit() else ui_priority,
         "default": _as_bool(style_elem.get(_qn("w", "default"))),
         "custom": _as_bool(style_elem.get(_qn("w", "customStyle"))),
+        "locked": style_elem.find("w:locked", DOCX_NS) is not None,
+        "auto_redefine": style_elem.find("w:autoRedefine", DOCX_NS) is not None,
+        "personal": style_elem.find("w:personal", DOCX_NS) is not None,
+        "personal_compose": style_elem.find("w:personalCompose", DOCX_NS) is not None,
+        "personal_reply": style_elem.find("w:personalReply", DOCX_NS) is not None,
+        "rsid": rsid,
         "hidden": style_elem.find("w:hidden", DOCX_NS) is not None,
         "semi_hidden": style_elem.find("w:semiHidden", DOCX_NS) is not None,
         "q_format": style_elem.find("w:qFormat", DOCX_NS) is not None,
@@ -2338,6 +2472,7 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
             "metadata": {
                 "style_id": style_id,
                 "display_name": display_name,
+                "aliases": aliases,
                 "type": style_type,
                 "based_on": based_on,
                 "next": next_style,
@@ -2345,6 +2480,12 @@ def _parse_style_element(style_elem: ET.Element) -> Dict[str, Any]:
                 "ui_priority": int(ui_priority) if ui_priority and ui_priority.isdigit() else ui_priority,
                 "default": _as_bool(style_elem.get(_qn("w", "default"))),
                 "custom": _as_bool(style_elem.get(_qn("w", "customStyle"))),
+                "locked": style_elem.find("w:locked", DOCX_NS) is not None,
+                "auto_redefine": style_elem.find("w:autoRedefine", DOCX_NS) is not None,
+                "personal": style_elem.find("w:personal", DOCX_NS) is not None,
+                "personal_compose": style_elem.find("w:personalCompose", DOCX_NS) is not None,
+                "personal_reply": style_elem.find("w:personalReply", DOCX_NS) is not None,
+                "rsid": rsid,
             },
             "visibility": {
                 "hidden": style_elem.find("w:hidden", DOCX_NS) is not None,
@@ -3516,6 +3657,59 @@ def _parse_word_style_font_nodes(nodes: Optional[List[Dict[str, Any]]]) -> Dict[
     return props
 
 
+def _parse_paragraph_borders(children: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    if not children:
+        return {}
+    borders: Dict[str, Any] = {}
+    for child in children:
+        tag = child.get("tag")
+        if tag not in {"top", "left", "bottom", "right", "between", "bar"}:
+            continue
+        attrs = child.get("attrs") or {}
+        size_pt = None
+        sz = attrs.get("sz")
+        if sz not in (None, ""):
+            try:
+                size_pt = round(float(sz) / 8, 2)
+            except (TypeError, ValueError):
+                size_pt = None
+        color = attrs.get("color")
+        border: Dict[str, Any] = {
+            "style": attrs.get("val") if attrs.get("val") != "nil" else "none",
+            "size_pt": size_pt,
+            "space": attrs.get("space"),
+            "color": color.upper() if color and color.lower() not in {"auto", "none"} else None,
+        }
+        for attr_name, output_key in (
+            ("themeColor", "theme_color"),
+            ("themeTint", "theme_tint"),
+            ("themeShade", "theme_shade"),
+        ):
+            if attrs.get(attr_name):
+                border[output_key] = attrs.get(attr_name)
+        borders[tag] = border
+    return borders
+
+
+def _parse_shading_node(attrs: Dict[str, Any]) -> Dict[str, Any]:
+    shading: Dict[str, Any] = {}
+    for attr_name, output_key in (
+        ("val", "val"),
+        ("fill", "fill"),
+        ("color", "color"),
+        ("themeFill", "theme_fill"),
+        ("themeColor", "theme_color"),
+        ("themeFillTint", "theme_fill_tint"),
+        ("themeFillShade", "theme_fill_shade"),
+        ("themeTint", "theme_tint"),
+        ("themeShade", "theme_shade"),
+    ):
+        value = attrs.get(attr_name)
+        if value not in (None, ""):
+            shading[output_key] = str(value).upper() if attr_name in {"fill", "color"} else value
+    return shading
+
+
 def _parse_word_style_paragraph_nodes(nodes: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
     if not nodes:
         return {}
@@ -3539,6 +3733,12 @@ def _parse_word_style_paragraph_nodes(nodes: Optional[List[Dict[str, Any]]]) -> 
                     "pos_twips": child_attrs.get("pos"),
                 })
             props["tabs"] = tabs
+        elif tag == "pBdr":
+            props["borders"] = _parse_paragraph_borders(node.get("children"))
+        elif tag == "shd":
+            shading = _parse_shading_node(attrs)
+            if shading:
+                props["shading"] = shading
         elif tag in {
             "contextualSpacing",
             "mirrorIndents",
@@ -4050,6 +4250,45 @@ def _filter_document_default_font_props(font_props: Optional[Dict[str, Any]]) ->
         "small_caps",
         "superscript",
         "subscript",
+        "ascii_font_name",
+        "hansi_font_name",
+        "hAnsi_font_name",
+        "complex_script_font_name",
+        "cs_font_name",
+        "east_asia_font_name",
+        "eastAsia_font_name",
+        "ascii_theme",
+        "hansi_theme",
+        "hAnsi_theme",
+        "complex_script_theme",
+        "cs_theme",
+        "east_asia_theme",
+        "eastAsia_theme",
+        "complex_script_size_pt",
+        "character_spacing_twips",
+        "scale_percent",
+        "kerning_pt",
+        "position_pt",
+        "underline_color_rgb",
+        "color_theme",
+        "color_theme_tint",
+        "color_theme_shade",
+        "language",
+        "language_east_asia",
+        "language_bidi",
+        "complex_script_bold",
+        "complex_script_italic",
+        "hidden",
+        "vanish",
+        "shadow",
+        "outline",
+        "emboss",
+        "imprint",
+        "no_proof",
+        "rtl",
+        "complex_script",
+        "spec_vanish",
+        "web_hidden",
     )
     normalized = {}
     for key in allowed_keys:
@@ -4078,6 +4317,24 @@ def _filter_document_default_paragraph_props(paragraph_props: Optional[Dict[str,
         "page_break_before",
         "widow_control",
         "alignment",
+        "text_alignment",
+        "text_direction",
+        "tabs",
+        "borders",
+        "shading",
+        "contextual_spacing",
+        "mirror_indents",
+        "suppress_line_numbers",
+        "suppress_auto_hyphens",
+        "kinsoku",
+        "word_wrap",
+        "overflow_punctuation",
+        "top_line_punctuation",
+        "auto_space_de",
+        "auto_space_dn",
+        "bidi",
+        "adjust_right_indent",
+        "snap_to_grid",
     )
     return {
         key: copy.deepcopy(paragraph_props.get(key))
@@ -4996,6 +5253,7 @@ def extract_styles_from_docx(docx_bytes: bytes) -> Dict[str, Any]:
         "font_catalog": [],
         SYSTEM_FONT_CATALOG_KEY: [],
         "xml_details": None,
+        "word_capabilities": get_word_complete_capabilities(),
         "document_tables": [],
         "document_captions": [],
         "content_controls": {"controls": [], "placeholders": [], "control_count": 0, "placeholder_count": 0, "unwrapped_placeholder_count": 0},
@@ -5554,6 +5812,45 @@ def update_template_document_defaults(
         "small_caps",
         "superscript",
         "subscript",
+        "ascii_font_name",
+        "hansi_font_name",
+        "hAnsi_font_name",
+        "complex_script_font_name",
+        "cs_font_name",
+        "east_asia_font_name",
+        "eastAsia_font_name",
+        "ascii_theme",
+        "hansi_theme",
+        "hAnsi_theme",
+        "complex_script_theme",
+        "cs_theme",
+        "east_asia_theme",
+        "eastAsia_theme",
+        "complex_script_size_pt",
+        "character_spacing_twips",
+        "scale_percent",
+        "kerning_pt",
+        "position_pt",
+        "underline_color_rgb",
+        "color_theme",
+        "color_theme_tint",
+        "color_theme_shade",
+        "language",
+        "language_east_asia",
+        "language_bidi",
+        "complex_script_bold",
+        "complex_script_italic",
+        "hidden",
+        "vanish",
+        "shadow",
+        "outline",
+        "emboss",
+        "imprint",
+        "no_proof",
+        "rtl",
+        "complex_script",
+        "spec_vanish",
+        "web_hidden",
     ):
         if key in normalized_updates:
             merged_font[key] = copy.deepcopy(normalized_updates.get(key))
@@ -5584,6 +5881,24 @@ def update_template_document_defaults(
         "page_break_before",
         "widow_control",
         "alignment",
+        "text_alignment",
+        "text_direction",
+        "tabs",
+        "borders",
+        "shading",
+        "contextual_spacing",
+        "mirror_indents",
+        "suppress_line_numbers",
+        "suppress_auto_hyphens",
+        "kinsoku",
+        "word_wrap",
+        "overflow_punctuation",
+        "top_line_punctuation",
+        "auto_space_de",
+        "auto_space_dn",
+        "bidi",
+        "adjust_right_indent",
+        "snap_to_grid",
     ):
         if key in normalized_updates:
             merged_paragraph[key] = copy.deepcopy(normalized_updates.get(key))
@@ -6280,6 +6595,7 @@ def clear_preview_cache(kernel_id: str | None = None) -> None:
     from app.services.template import preview as template_preview
 
     template_preview.clear_preview_cache(kernel_id)
+    clear_sample_preview_cache(kernel_id)
 
 def _get_fitz():
     """Lazy-load PyMuPDF (fitz) module."""
@@ -6294,7 +6610,63 @@ def _get_fitz():
     return _fitz
 
 
-def _convert_pdf_to_png(pdf_bytes: bytes, dpi: int = 150) -> Optional[bytes]:
+def _trim_pixmap_to_content_clip(page: Any, pix: Any, zoom: float, padding_px: int = 18) -> Optional[Any]:
+    """Return a PDF-space clip around non-white pixels in a rendered page."""
+    try:
+        width = int(pix.width)
+        height = int(pix.height)
+        channels = int(pix.n)
+        samples = pix.samples
+        if width <= 0 or height <= 0 or channels < 3:
+            return None
+
+        min_x = width
+        min_y = height
+        max_x = -1
+        max_y = -1
+        threshold = 246
+        stride = width * channels
+        for y in range(height):
+            row_offset = y * stride
+            for x in range(width):
+                offset = row_offset + x * channels
+                r = samples[offset]
+                g = samples[offset + 1]
+                b = samples[offset + 2]
+                if r < threshold or g < threshold or b < threshold:
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+
+        if max_x < min_x or max_y < min_y:
+            return None
+
+        min_x = max(0, min_x - padding_px)
+        min_y = max(0, min_y - padding_px)
+        max_x = min(width - 1, max_x + padding_px)
+        max_y = min(height - 1, max_y + padding_px)
+
+        page_rect = page.rect
+        clip = _fitz.Rect(
+            page_rect.x0 + (min_x / zoom),
+            page_rect.y0 + (min_y / zoom),
+            page_rect.x0 + ((max_x + 1) / zoom),
+            page_rect.y0 + ((max_y + 1) / zoom),
+        )
+        if clip.width <= 0 or clip.height <= 0:
+            return None
+        return clip & page_rect
+    except Exception as exc:
+        _logger.debug("[Template] Could not trim preview pixmap: %s", exc)
+        return None
+
+
+def _convert_pdf_to_png(pdf_bytes: bytes, dpi: int = 150, trim_whitespace: bool = True) -> Optional[bytes]:
     """Convert first page of PDF to PNG image.
     
     Args:
@@ -6320,7 +6692,11 @@ def _convert_pdf_to_png(pdf_bytes: bytes, dpi: int = 150) -> Optional[bytes]:
         mat = fitz.Matrix(zoom, zoom)
         
         # Render to pixmap
-        pix = page.get_pixmap(matrix=mat)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        if trim_whitespace:
+            clip = _trim_pixmap_to_content_clip(page, pix, zoom)
+            if clip is not None:
+                pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
         
         # Convert to PNG bytes
         png_bytes = pix.tobytes("png")
@@ -6330,6 +6706,207 @@ def _convert_pdf_to_png(pdf_bytes: bytes, dpi: int = 150) -> Optional[bytes]:
     except Exception as e:
         _logger.error(f"[Template] Error converting PDF to PNG: {e}")
         return None
+
+
+_SAMPLE_PREVIEW_CACHE_LOCK = threading.RLock()
+_SAMPLE_PREVIEW_CACHE: Dict[str, Dict[str, Any]] = {}
+_SAMPLE_PREVIEW_CACHE_MAX = 32
+_SAMPLE_PREVIEW_MAX_BYTES = int(os.getenv("INSPYRO_TEMPLATE_SAMPLE_PREVIEW_MAX_BYTES", str(12 * 1024 * 1024)))
+
+
+def clear_sample_preview_cache(kernel_id: str | None = None) -> None:
+    with _SAMPLE_PREVIEW_CACHE_LOCK:
+        if kernel_id is None:
+            _SAMPLE_PREVIEW_CACHE.clear()
+            return
+        prefix = f"{str(kernel_id or '').strip()}::"
+        for key in list(_SAMPLE_PREVIEW_CACHE):
+            if key.startswith(prefix):
+                _SAMPLE_PREVIEW_CACHE.pop(key, None)
+
+
+def _convert_pdf_to_png_pages(pdf_bytes: bytes, dpi: int = 130) -> List[Dict[str, Any]]:
+    """Convert all PDF pages to full-page PNGs for the sample DOCX preview."""
+    fitz = _get_fitz()
+    if fitz is None:
+        return []
+
+    pages: List[Dict[str, Any]] = []
+    doc = None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        for page_index in range(len(doc)):
+            page = doc[page_index]
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pages.append({
+                "page_index": page_index,
+                "width": pix.width,
+                "height": pix.height,
+                "png_base64": base64.b64encode(pix.tobytes("png")).decode("utf-8"),
+            })
+    except Exception as exc:
+        _logger.warning("[Template] Sample preview PDF raster failed: %s", exc)
+        return []
+    finally:
+        try:
+            if doc is not None:
+                doc.close()
+        except Exception:
+            pass
+    return pages
+
+
+def _sample_preview_cache_key(kernel_id: str, preview_key: str) -> str:
+    return f"{str(kernel_id or 'default').strip()}::{str(preview_key or 'sample').strip()}"
+
+
+def _decode_sample_docx_base64(docx_base64: str) -> bytes:
+    if not docx_base64 or not str(docx_base64).strip():
+        raise ValueError("docx_base64 requerido")
+    try:
+        docx_bytes = base64.b64decode(str(docx_base64), validate=True)
+    except Exception as exc:
+        raise ValueError("docx_base64 invalido") from exc
+    if not docx_bytes:
+        raise ValueError("DOCX vacio")
+    if len(docx_bytes) > _SAMPLE_PREVIEW_MAX_BYTES:
+        raise ValueError(f"DOCX demasiado grande. Maximo permitido: {_SAMPLE_PREVIEW_MAX_BYTES} bytes")
+    if not zipfile.is_zipfile(io.BytesIO(docx_bytes)):
+        raise ValueError("DOCX invalido: no es un ZIP OOXML valido")
+    return docx_bytes
+
+
+def render_sample_preview_docx_with_word(
+    kernel_id: str,
+    preview_key: str,
+    docx_base64: str,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """Render the frontend-generated sample DOCX with native Word into full-page PNGs."""
+    effective_preview_key = str(preview_key or "sample-docx").strip() or "sample-docx"
+    cache_key = _sample_preview_cache_key(kernel_id, effective_preview_key)
+    if not force_refresh:
+        with _SAMPLE_PREVIEW_CACHE_LOCK:
+            cached = _SAMPLE_PREVIEW_CACHE.get(cache_key)
+            if cached:
+                return copy.deepcopy(cached)
+
+    docx_bytes = _decode_sample_docx_base64(docx_base64)
+    warnings: List[str] = []
+
+    try:
+        from app.services import pdf_converter
+    except Exception as exc:
+        return {
+            "preview_key": effective_preview_key,
+            "preview_pages": [],
+            "converter_used": "unavailable",
+            "warnings": [f"Convertidor Word no disponible: {exc}"],
+        }
+
+    if not getattr(pdf_converter, "MS_WORD_AVAILABLE", False):
+        return {
+            "preview_key": effective_preview_key,
+            "preview_pages": [],
+            "converter_used": "word_unavailable",
+            "warnings": ["Microsoft Word no esta disponible; se conserva el preview JS."],
+        }
+
+    temp_dir = tempfile.mkdtemp(prefix="inspyro_template_sample_preview_")
+    try:
+        temp_path = Path(temp_dir)
+        docx_path = temp_path / "sample-preview.docx"
+        pdf_path = temp_path / "sample-preview.pdf"
+        docx_path.write_bytes(docx_bytes)
+
+        with pdf_converter._word_conversion_lock:
+            result = pdf_converter._convert_to_pdf_word_with_timeout(str(docx_path), str(pdf_path), 25)
+
+        if not result.get("success"):
+            error = result.get("error") or "conversion_failed"
+            return {
+                "preview_key": effective_preview_key,
+                "preview_pages": [],
+                "converter_used": result.get("converter_used") or "word_native",
+                "warnings": [f"Word no pudo generar el preview: {error}"],
+            }
+
+        if not pdf_path.exists() or pdf_path.stat().st_size <= 0:
+            return {
+                "preview_key": effective_preview_key,
+                "preview_pages": [],
+                "converter_used": "word_native",
+                "warnings": ["Word no produjo un PDF valido para el preview."],
+            }
+
+        pages = _convert_pdf_to_png_pages(pdf_path.read_bytes(), dpi=130)
+        if not pages:
+            warnings.append("El PDF de Word no pudo rasterizarse a PNG.")
+
+        payload = {
+            "preview_key": effective_preview_key,
+            "preview_pages": pages,
+            "converter_used": "word_native",
+            "warnings": warnings,
+        }
+        if pages:
+            with _SAMPLE_PREVIEW_CACHE_LOCK:
+                _SAMPLE_PREVIEW_CACHE[cache_key] = copy.deepcopy(payload)
+                while len(_SAMPLE_PREVIEW_CACHE) > _SAMPLE_PREVIEW_CACHE_MAX:
+                    oldest_key = next(iter(_SAMPLE_PREVIEW_CACHE))
+                    _SAMPLE_PREVIEW_CACHE.pop(oldest_key, None)
+        return payload
+    except Exception as exc:
+        _logger.warning("[Template] Word sample preview failed: %s", exc)
+        return {
+            "preview_key": effective_preview_key,
+            "preview_pages": [],
+            "converter_used": "word_native",
+            "warnings": [f"Word no pudo generar el preview: {exc}"],
+        }
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def save_sample_preview_docx(filename: str, docx_base64: str) -> Path:
+    docx_bytes = _decode_sample_docx_base64(docx_base64)
+    raw_name = Path(str(filename or "template-preview.docx")).name
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("._") or "template-preview.docx"
+    if not safe_name.lower().endswith(".docx"):
+        safe_name = f"{safe_name}.docx"
+    target_dir = get_app_storage_dir("template_sample_previews")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{Path(safe_name).stem}_{uuid.uuid4().hex[:8]}.docx"
+    target_path.write_bytes(docx_bytes)
+    return target_path
+
+
+def open_path_with_default_application(path: Path) -> Dict[str, Any]:
+    if sys.platform == "win32":
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            raise RuntimeError("Apertura por aplicacion por defecto no disponible")
+        startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(
+            ["open", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    else:
+        subprocess.Popen(
+            ["xdg-open", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+    return {"success": True, "path": str(path), "method": "system_default"}
 
 
 def _hex_to_fitz_color(hex_color: Optional[str], default: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -6708,7 +7285,7 @@ def _clear_header_footer(target_doc: Document) -> None:
 def _apply_compact_preview_page_setup(target_doc: Document) -> None:
     for section in target_doc.sections:
         section.page_width = Inches(6)
-        section.page_height = Inches(1.6)
+        section.page_height = Inches(2.2)
         section.left_margin = Inches(0.2)
         section.right_margin = Inches(0.2)
         section.top_margin = Inches(0.1)
@@ -7498,9 +8075,31 @@ def _append_rpr_from_font_props(r_pr: ET.Element, font_props: Dict[str, Any]) ->
         return
 
     font_name = font_props.get("font_name")
-    if font_name:
+    font_attr_map = {
+        "ascii_font_name": "ascii",
+        "hansi_font_name": "hAnsi",
+        "hAnsi_font_name": "hAnsi",
+        "complex_script_font_name": "cs",
+        "cs_font_name": "cs",
+        "east_asia_font_name": "eastAsia",
+        "eastAsia_font_name": "eastAsia",
+        "ascii_theme": "asciiTheme",
+        "hansi_theme": "hAnsiTheme",
+        "hAnsi_theme": "hAnsiTheme",
+        "complex_script_theme": "csTheme",
+        "cs_theme": "csTheme",
+        "east_asia_theme": "eastAsiaTheme",
+        "eastAsia_theme": "eastAsiaTheme",
+    }
+    if font_name or any(key in font_props and font_props.get(key) not in (None, "") for key in font_attr_map):
         r_fonts = ET.SubElement(r_pr, _qn("w", "rFonts"))
-        _set_explicit_family_on_rfonts(r_fonts, str(font_name))
+        if font_name:
+            _set_explicit_family_on_rfonts(r_fonts, str(font_name))
+        else:
+            for key, attr_name in font_attr_map.items():
+                value = font_props.get(key)
+                if value not in (None, ""):
+                    r_fonts.set(_qn("w", attr_name), str(value))
 
     size_pt = font_props.get("font_size_pt")
     if size_pt not in (None, ""):
@@ -7511,6 +8110,24 @@ def _append_rpr_from_font_props(r_pr: ET.Element, font_props: Dict[str, Any]) ->
                 sz.set(_qn("w", "val"), str(size_half_points))
         except (TypeError, ValueError):
             pass
+    if font_props.get("complex_script_size_pt") not in (None, ""):
+        hp = _half_points(font_props.get("complex_script_size_pt"))
+        if hp is not None:
+            sz_cs = ET.SubElement(r_pr, _qn("w", "szCs"))
+            sz_cs.set(_qn("w", "val"), hp)
+    for prop_key, tag_name in (
+        ("character_spacing_twips", "spacing"),
+        ("scale_percent", "w"),
+    ):
+        if font_props.get(prop_key) not in (None, ""):
+            elem = ET.SubElement(r_pr, _qn("w", tag_name))
+            elem.set(_qn("w", "val"), str(font_props.get(prop_key)))
+    for prop_key, tag_name in (("kerning_pt", "kern"), ("position_pt", "position")):
+        if font_props.get(prop_key) not in (None, ""):
+            hp = _half_points(font_props.get(prop_key))
+            if hp is not None:
+                elem = ET.SubElement(r_pr, _qn("w", tag_name))
+                elem.set(_qn("w", "val"), hp)
 
     if font_props.get("bold"):
         ET.SubElement(r_pr, _qn("w", "b"))
@@ -7519,15 +8136,24 @@ def _append_rpr_from_font_props(r_pr: ET.Element, font_props: Dict[str, Any]) ->
 
     underline_style = font_props.get("underline_style")
     underline_enabled = font_props.get("underline")
-    if underline_style or underline_enabled:
+    if underline_style or underline_enabled or font_props.get("underline_color_rgb"):
         u = ET.SubElement(r_pr, _qn("w", "u"))
         if underline_style:
             u.set(_qn("w", "val"), str(underline_style).lower())
+        underline_color = _normalize_ooxml_color(font_props.get("underline_color_rgb"))
+        if underline_color:
+            u.set(_qn("w", "color"), underline_color)
 
     color_rgb = _normalize_ooxml_color(font_props.get("color_rgb"))
-    if color_rgb:
+    if color_rgb or font_props.get("color_theme"):
         color = ET.SubElement(r_pr, _qn("w", "color"))
-        color.set(_qn("w", "val"), color_rgb)
+        if color_rgb:
+            color.set(_qn("w", "val"), color_rgb)
+        if font_props.get("color_theme"):
+            color.set(_qn("w", "themeColor"), str(font_props.get("color_theme")))
+            for key, attr_name in (("color_theme_tint", "themeTint"), ("color_theme_shade", "themeShade")):
+                if font_props.get(key) not in (None, ""):
+                    color.set(_qn("w", attr_name), str(font_props.get(key)))
 
     highlight = font_props.get("highlight_color")
     if highlight:
@@ -7549,6 +8175,37 @@ def _append_rpr_from_font_props(r_pr: ET.Element, font_props: Dict[str, Any]) ->
     elif font_props.get("subscript"):
         va = ET.SubElement(r_pr, _qn("w", "vertAlign"))
         va.set(_qn("w", "val"), "subscript")
+    if any(font_props.get(key) not in (None, "") for key in ("language", "language_east_asia", "language_bidi")):
+        lang = ET.SubElement(r_pr, _qn("w", "lang"))
+        for key, attr_name in (
+            ("language", "val"),
+            ("language_east_asia", "eastAsia"),
+            ("language_bidi", "bidi"),
+        ):
+            if font_props.get(key) not in (None, ""):
+                lang.set(_qn("w", attr_name), str(font_props.get(key)))
+    for key, tag_name in (
+        ("complex_script_bold", "bCs"),
+        ("complex_script_italic", "iCs"),
+        ("hidden", "vanish"),
+        ("vanish", "vanish"),
+        ("shadow", "shadow"),
+        ("outline", "outline"),
+        ("emboss", "emboss"),
+        ("imprint", "imprint"),
+        ("no_proof", "noProof"),
+        ("rtl", "rtl"),
+        ("complex_script", "cs"),
+        ("spec_vanish", "specVanish"),
+        ("web_hidden", "webHidden"),
+    ):
+        if key in font_props:
+            value = _coerce_optional_bool(font_props.get(key))
+            if value is None:
+                continue
+            elem = ET.SubElement(r_pr, _qn("w", tag_name))
+            if value is False:
+                elem.set(_qn("w", "val"), "0")
 
 
 def _append_ppr_from_paragraph_props(p_pr: ET.Element, paragraph_props: Dict[str, Any]) -> None:
@@ -7655,6 +8312,53 @@ def _append_ppr_from_paragraph_props(p_pr: ET.Element, paragraph_props: Dict[str
     _append_on_off("keepLines", paragraph_props.get("keep_together"))
     _append_on_off("pageBreakBefore", paragraph_props.get("page_break_before"))
     _append_on_off("widowControl", paragraph_props.get("widow_control"))
+    for key, tag_name in (
+        ("text_alignment", "textAlignment"),
+        ("text_direction", "textDirection"),
+    ):
+        if paragraph_props.get(key) not in (None, ""):
+            elem = ET.SubElement(p_pr, _qn("w", tag_name))
+            elem.set(_qn("w", "val"), str(paragraph_props.get(key)))
+    tabs = paragraph_props.get("tabs")
+    if isinstance(tabs, list) and tabs:
+        tabs_elem = ET.SubElement(p_pr, _qn("w", "tabs"))
+        for tab_info in tabs:
+            if not isinstance(tab_info, dict):
+                continue
+            pos = tab_info.get("pos_twips") or tab_info.get("position_twips")
+            if pos in (None, ""):
+                continue
+            tab_elem = ET.SubElement(tabs_elem, _qn("w", "tab"))
+            tab_elem.set(_qn("w", "pos"), str(pos))
+            tab_elem.set(_qn("w", "val"), str(tab_info.get("val") or "left"))
+            if tab_info.get("leader") not in (None, ""):
+                tab_elem.set(_qn("w", "leader"), str(tab_info.get("leader")))
+    for key, tag_name in (
+        ("contextual_spacing", "contextualSpacing"),
+        ("mirror_indents", "mirrorIndents"),
+        ("suppress_line_numbers", "suppressLineNumbers"),
+        ("suppress_auto_hyphens", "suppressAutoHyphens"),
+        ("kinsoku", "kinsoku"),
+        ("word_wrap", "wordWrap"),
+        ("overflow_punctuation", "overflowPunct"),
+        ("top_line_punctuation", "topLinePunct"),
+        ("auto_space_de", "autoSpaceDE"),
+        ("auto_space_dn", "autoSpaceDN"),
+        ("bidi", "bidi"),
+        ("adjust_right_indent", "adjustRightInd"),
+        ("snap_to_grid", "snapToGrid"),
+    ):
+        if key in paragraph_props:
+            value = _coerce_optional_bool(paragraph_props.get(key))
+            if value is None:
+                continue
+            elem = ET.SubElement(p_pr, _qn("w", tag_name))
+            if value is False:
+                elem.set(_qn("w", "val"), "0")
+    if "borders" in paragraph_props:
+        _append_paragraph_borders(p_pr, paragraph_props.get("borders") or {})
+    if "shading" in paragraph_props:
+        _apply_paragraph_shading(p_pr, paragraph_props.get("shading") or {})
 
 
 def _extract_table_format_for_style(table_info: Dict[str, Any]) -> Dict[str, Any]:

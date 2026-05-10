@@ -34,6 +34,15 @@ test.describe.serial('MCP UI', () => {
 
     await page.getByTestId('mcp-tab-info').click();
     await expect(page.locator('.mcp-info-grid')).toContainText(harness.urls.mcp, { timeout: 15000 });
+    await page.getByTestId('mcp-tab-config').click();
+    await expect(page.getByTestId('mcp-config-endpoint')).toContainText(harness.urls.mcp, { timeout: 15000 });
+    await expect(page.getByTestId('mcp-config-http-status')).toContainText(/Servicio HTTP iniciado/i, { timeout: 15000 });
+    await expect(page.getByTestId('mcp-client-preset-codex')).toContainText(/mcp_servers\.inspyro/i);
+    await expect(page.getByTestId('mcp-client-preset-claude-code')).toContainText(/claude mcp add-json inspyro/i);
+    await expect(page.getByTestId('mcp-client-preset-claude-desktop')).toContainText(/INSPYRO_BACKEND_NOTEBOOK_WS_URL/i);
+    await expect(page.getByTestId('mcp-client-preset-vscode')).toContainText(/"servers"/i);
+    await expect(page.getByTestId('mcp-client-preset-cursor')).toContainText(/"mcpServers"/i);
+    await expect(page.getByTestId('mcp-client-preset-generic-http')).toContainText(/stateful-http/i);
 
     const mcp = new McpHttpClient(harness.urls.mcp);
     const initializeResult = await mcp.initialize();

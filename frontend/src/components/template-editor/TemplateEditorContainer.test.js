@@ -2,6 +2,69 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import TemplateEditorContainer from './TemplateEditorContainer';
 
+jest.mock('./sampleDocxPreview', () => {
+  const activeFrom = (args = {}) => {
+    if (args.showTableDirectPanel) return 'direct_table';
+    if (String(args.selectedSemanticSlotName || '').startsWith('heading')) return 'heading';
+    if (args.selectedSemanticSlotName === 'caption') return 'caption';
+    if (args.selectedSemanticSlotName === 'code') return 'code';
+    if (String(args.selectedSemanticSlotName || '').startsWith('list')) return 'list';
+    if (args.selectedSemanticSlotName === 'table_default') return 'table';
+    return 'body';
+  };
+  return {
+    createTemplateSamplePreviewModel: jest.fn((args = {}) => {
+      const activeSection = activeFrom(args);
+      return {
+        previewKey: `sample-docx-${activeSection}`,
+        activeSection,
+        sections: [],
+        metadata: {},
+      };
+    }),
+    buildTemplateSampleDocxBlob: jest.fn(() => Promise.resolve(new Blob(['mock-docx'], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }))),
+    blobToBase64: jest.fn(() => Promise.resolve('bW9jay1kb2N4')),
+    renderTemplateSampleDocxPreview: jest.fn(async (blob, container, model) => {
+      container.innerHTML = `<div data-testid="mock-docx-page">Sample DOCX ${model.activeSection}</div>`;
+    }),
+  };
+});
+
+const configureSampleDocxPreviewMocks = () => {
+  const sampleDocxPreview = require('./sampleDocxPreview');
+  const activeFrom = (args = {}) => {
+    if (args.showTableDirectPanel) return 'direct_table';
+    if (String(args.selectedSemanticSlotName || '').startsWith('heading')) return 'heading';
+    if (args.selectedSemanticSlotName === 'caption') return 'caption';
+    if (args.selectedSemanticSlotName === 'code') return 'code';
+    if (String(args.selectedSemanticSlotName || '').startsWith('list')) return 'list';
+    if (args.selectedSemanticSlotName === 'table_default') return 'table';
+    return 'body';
+  };
+  sampleDocxPreview.createTemplateSamplePreviewModel.mockImplementation((args = {}) => {
+    const activeSection = activeFrom(args);
+    return {
+      previewKey: `sample-docx-${activeSection}`,
+      activeSection,
+      sections: [],
+      metadata: {},
+    };
+  });
+  sampleDocxPreview.buildTemplateSampleDocxBlob.mockImplementation(() => Promise.resolve(new Blob(['mock-docx'], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  })));
+  sampleDocxPreview.blobToBase64.mockImplementation(() => Promise.resolve('bW9jay1kb2N4'));
+  sampleDocxPreview.renderTemplateSampleDocxPreview.mockImplementation(async (blob, container, model) => {
+    container.innerHTML = `<div data-testid="mock-docx-page">Sample DOCX ${model.activeSection}</div>`;
+  });
+};
+
+beforeEach(() => {
+  configureSampleDocxPreviewMocks();
+});
+
 const readBlobText = (blob) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
@@ -430,6 +493,22 @@ describe('TemplateEditorContainer empty state', () => {
     expect(screen.queryByTestId('template-empty-upload')).toBeNull();
     expect(screen.queryByTestId('template-empty-import-json')).toBeNull();
   });
+
+  it('shows recovery actions when persisted template attach fails', () => {
+    renderEditor({
+      isOpeningPersistedTemplate: true,
+      templateBinding: {
+        status: 'error',
+        message: 'File is not a zip file',
+      },
+    });
+
+    expect(screen.getByText(/File is not a zip file/i)).toBeTruthy();
+    expect(screen.getByText('No hay plantilla activa.')).toBeTruthy();
+    expect(screen.getByTestId('template-empty-upload')).toBeTruthy();
+    expect(screen.getByTestId('template-empty-import-json')).toBeTruthy();
+    expect(screen.queryByText('Cargando plantilla...')).toBeNull();
+  });
 });
 
 describe('TemplateEditorContainer effective font rendering', () => {
@@ -621,33 +700,93 @@ describe('TemplateEditorContainer effective font rendering', () => {
     expect(screen.getAllByRole('heading', { name: 'Caption' }).length).toBeGreaterThan(0);
   });
 
-  it('uses the internal preview by default without auto-rendering Word', () => {
+  it('uses the sample DOCX preview by default without auto-rendering Word', async () => {
     const { props } = renderEditor({
       templateInfo: buildTemplateInfo(),
     });
 
-    expect(screen.getByTestId('template-internal-preview')).toBeTruthy();
+    expect(await screen.findByTestId('template-sample-docx-preview')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('mock-docx-page').textContent).toContain('body'));
     expect(screen.getByTestId('template-native-word-preview')).toBeTruthy();
     expect(props.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
       type: 'template_preview_style',
     }));
-    expect(screen.getByText(/Preview interno automatico/i)).toBeTruthy();
+    expect(screen.getByText(/Preview JS listo/i)).toBeTruthy();
   });
 
-  it('requests native Word preview only from the explicit rail button', async () => {
+  it('requests native Word preview over REST only from the explicit rail button', async () => {
     const { props } = renderEditor({
       templateInfo: buildTemplateInfo(),
     });
 
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        preview_key: 'sample-docx-body',
+        converter_used: 'word_native',
+        warnings: [],
+        preview_pages: [
+          {
+            page_index: 0,
+            width: 816,
+            height: 1056,
+            png_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+          },
+        ],
+      }),
+    });
     props.sendMessage.mockClear();
+    await waitFor(() => expect(screen.getByTestId('template-native-word-preview').disabled).toBe(false));
     fireEvent.click(screen.getByTestId('template-native-word-preview'));
 
-    await waitFor(() => expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'template_preview_style',
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/templates/sample-preview/render-word'),
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    const request = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(request).toEqual(expect.objectContaining({
       kernel_id: 'kernel-template',
-      preview_engine: 'word_native',
-      native_word_preview: true,
-    })));
+      preview_key: 'sample-docx-body',
+      docx_base64: 'bW9jay1kb2N4',
+      force_refresh: true,
+    }));
+    expect(props.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_preview_style',
+    }));
+  });
+
+  it('falls back to the JS sample preview instead of showing stale Word pages after style change', async () => {
+    const { props } = renderEditor({
+      templateInfo: buildTemplateInfo(),
+    });
+
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        preview_key: 'sample-docx-body',
+        converter_used: 'word_native',
+        warnings: [],
+        preview_pages: [
+          {
+            page_index: 0,
+            width: 816,
+            height: 1056,
+            png_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+          },
+        ],
+      }),
+    });
+    props.sendMessage.mockClear();
+    await waitFor(() => expect(screen.getByTestId('template-native-word-preview').disabled).toBe(false));
+    fireEvent.click(screen.getByTestId('template-native-word-preview'));
+
+    await waitFor(() => expect(screen.getByAltText('Vista previa Word pagina 1')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('template-slot-card-caption'));
+
+    await waitFor(() => expect(screen.queryByAltText('Vista previa Word pagina 1')).toBeNull());
+    expect(screen.getByTestId('template-sample-docx-preview')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('mock-docx-page').textContent).toContain('caption'));
   });
 
   it('does not reset preview state repeatedly when stable template metadata rerenders', () => {
@@ -700,6 +839,117 @@ describe('TemplateEditorContainer effective font rendering', () => {
     }
 
     expect(onStatusMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores stale template_uploaded ACKs while another upload is pending', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        template_token: 'token-current',
+        size_bytes: 128,
+        sha256: 'sha-current',
+      }),
+    });
+
+    try {
+      const staleTemplate = cloneTemplateInfo(buildTemplateInfo());
+      staleTemplate.file_name = 'stale-template.docx';
+      const currentTemplate = cloneTemplateInfo(buildTemplateInfo());
+      currentTemplate.file_name = 'current-template.docx';
+      const baseTemplate = buildTemplateInfo();
+      const { props, fileInput, rerender } = renderEditor({
+        templateInfo: baseTemplate,
+      });
+
+      fireEvent.change(fileInput, {
+        target: {
+          files: [new File(['fake-docx'], 'current-template.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })],
+        },
+      });
+
+      await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
+        templateToken: 'token-current',
+      })));
+      const uploadPayload = props.onTemplateUpload.mock.calls.find(([payload]) => payload?.templateToken === 'token-current')[0];
+      expect(screen.getByTestId('template-upload-button').disabled).toBe(true);
+
+      rerender(
+        <TemplateEditorContainer
+          {...props}
+          templateInfo={baseTemplate}
+          lastMessage={{
+            type: 'template_uploaded',
+            request_id: 'tpl_upload_stale',
+            template: staleTemplate,
+          }}
+        />,
+      );
+
+      expect(props.onTemplateChange).not.toHaveBeenCalledWith(staleTemplate);
+      expect(screen.getByTestId('template-upload-button').disabled).toBe(true);
+
+      rerender(
+        <TemplateEditorContainer
+          {...props}
+          templateInfo={baseTemplate}
+          lastMessage={{
+            type: 'template_uploaded',
+            request_id: uploadPayload.requestId,
+            template: currentTemplate,
+          }}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByTestId('template-upload-button').disabled).toBe(false));
+      expect(props.onTemplateChange).toHaveBeenCalledWith(currentTemplate);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('clears upload state when authoritative templateInfo changes even if the ACK is not the current lastMessage', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        template_token: 'token-current',
+        size_bytes: 128,
+        sha256: 'sha-current',
+      }),
+    });
+
+    try {
+      const baseTemplate = buildTemplateInfo();
+      const updatedTemplate = cloneTemplateInfo(baseTemplate);
+      updatedTemplate.file_name = 'current-template.docx';
+      const { props, fileInput, rerender } = renderEditor({
+        templateInfo: baseTemplate,
+      });
+
+      fireEvent.change(fileInput, {
+        target: {
+          files: [new File(['fake-docx'], 'current-template.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })],
+        },
+      });
+
+      await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
+        templateToken: 'token-current',
+      })));
+      expect(screen.getByTestId('template-upload-button').disabled).toBe(true);
+
+      rerender(
+        <TemplateEditorContainer
+          {...props}
+          templateInfo={updatedTemplate}
+          lastMessage={{ type: 'ping' }}
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByTestId('template-upload-button').disabled).toBe(false));
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it('sends template_update_semantic_slots when a semantic slot changes', async () => {
@@ -1070,14 +1320,9 @@ describe('TemplateEditorContainer effective font rendering', () => {
     await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
       templateToken: 'template-import-token',
       requestId: expect.stringMatching(/^tpl_upload_/),
-      attachSent: true,
     })));
-    expect(props.sendMessage).toHaveBeenCalledTimes(1);
-    expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+    expect(props.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
       type: 'template_attach',
-      kernel_id: 'kernel-template',
-      template_token: 'template-import-token',
-      request_id: expect.stringMatching(/^tpl_upload_/),
     }));
   });
 
@@ -1111,14 +1356,9 @@ describe('TemplateEditorContainer effective font rendering', () => {
     await waitFor(() => expect(props.onTemplateUpload).toHaveBeenCalledWith(expect.objectContaining({
       templateToken: 'template-import-token',
       requestId: expect.stringMatching(/^tpl_upload_/),
-      attachSent: true,
     })));
-    expect(props.sendMessage).toHaveBeenCalledTimes(1);
-    expect(props.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+    expect(props.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
       type: 'template_attach',
-      kernel_id: 'kernel-template',
-      template_token: 'template-import-token',
-      request_id: expect.stringMatching(/^tpl_upload_/),
     }));
   });
 

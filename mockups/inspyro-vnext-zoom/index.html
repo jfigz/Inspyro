@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Inspyro vNext - Semantic Zoom Mockup</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand-mark">I</div>
+          <div>
+            <div class="brand-title">Inspyro Model-first</div>
+            <div class="brand-subtitle">Engineering calculation scene</div>
+          </div>
+        </div>
+
+        <nav class="mode-strip" aria-label="Semantic zoom modes">
+          <button class="mode-button active" type="button" data-zoom-target="0.78">
+            <span class="mode-index">01</span>
+            <span>Proyecto</span>
+          </button>
+          <button class="mode-button" type="button" data-zoom-target="1.38">
+            <span class="mode-index">02</span>
+            <span>Sistemas</span>
+          </button>
+          <button class="mode-button" type="button" data-zoom-target="2.2">
+            <span class="mode-index">03</span>
+            <span>Elemento</span>
+          </button>
+          <button class="mode-button" type="button" data-zoom-target="3.25">
+            <span class="mode-index">04</span>
+            <span>Calculo</span>
+          </button>
+          <button class="mode-button" type="button" data-zoom-target="4.25">
+            <span class="mode-index">05</span>
+            <span>Evidencia</span>
+          </button>
+        </nav>
+
+        <div class="top-actions">
+          <label class="search-box">
+            <span>Buscar</span>
+            <input id="searchInput" type="search" placeholder="V-14, ULS-03, docx">
+          </label>
+          <button id="agentPingButton" class="primary-action" type="button">Agente MCP</button>
+        </div>
+      </header>
+
+      <div class="main-grid">
+        <aside class="left-panel panel">
+          <section class="panel-section">
+            <div class="section-heading">
+              <span>Modelo semantico</span>
+              <span class="chip">.inspx</span>
+            </div>
+            <div class="tree-list" id="modelTree">
+              <button class="tree-item active" type="button" data-select="project">
+                <span class="tree-node root"></span>
+                <span class="tree-copy">
+                  <strong>PVI Alameda</strong>
+                  <small>modelo canonico</small>
+                </span>
+              </button>
+              <button class="tree-item" type="button" data-select="deck">
+                <span class="tree-node teal"></span>
+                <span class="tree-copy">
+                  <strong>Tablero T-01</strong>
+                  <small>geometria, losa, carpeta</small>
+                </span>
+              </button>
+              <button class="tree-item warning" type="button" data-select="girder-v14">
+                <span class="tree-node amber"></span>
+                <span class="tree-copy">
+                  <strong>Viga V-14</strong>
+                  <small>flexion gobierna ULS-03</small>
+                </span>
+              </button>
+              <button class="tree-item" type="button" data-select="abutment-e2">
+                <span class="tree-node violet"></span>
+                <span class="tree-copy">
+                  <strong>Estribo E-02</strong>
+                  <small>empuje + apoyo elastomerico</small>
+                </span>
+              </button>
+              <button class="tree-item" type="button" data-select="foundation-f3">
+                <span class="tree-node green"></span>
+                <span class="tree-copy">
+                  <strong>Pilotes F-03</strong>
+                  <small>capacidad axial y lateral</small>
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-heading">
+              <span>Capas</span>
+              <span class="chip">LOD</span>
+            </div>
+            <label class="toggle-row">
+              <input type="checkbox" data-layer="geometry" checked>
+              <span>Geometria fisica</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" data-layer="loads" checked>
+              <span>Cargas y combinaciones</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" data-layer="calculations" checked>
+              <span>Cadena de calculo</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" data-layer="code" checked>
+              <span>Codigo Python</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" data-layer="report" checked>
+              <span>Reporte DOCX</span>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-heading">
+              <span>Escenarios</span>
+              <span class="status-pill status-running">Activo</span>
+            </div>
+            <button class="scenario-row selected" type="button" data-scenario="uls">
+              <strong>ULS envelope</strong>
+              <span>max demanda 0.84</span>
+            </button>
+            <button class="scenario-row" type="button" data-scenario="sls">
+              <strong>SLS frecuente</strong>
+              <span>flecha L/740</span>
+            </button>
+            <button class="scenario-row" type="button" data-scenario="seismic">
+              <strong>Sismo transversal</strong>
+              <span>deriva 0.31%</span>
+            </button>
+          </section>
+        </aside>
+
+        <main class="workspace">
+          <section class="viewport-shell">
+            <div class="viewport-topline">
+              <div>
+                <div class="breadcrumb" id="breadcrumb">PVI Alameda / Superestructura / Viga V-14</div>
+                <div class="depth-title" id="depthTitle">Vista de proyecto</div>
+              </div>
+              <div class="quality-strip">
+                <span class="quality-item ok">Checks 128/131</span>
+                <span class="quality-item warn">3 advertencias</span>
+                <span class="quality-item ok">DOCX listo</span>
+              </div>
+            </div>
+
+            <div class="scene-frame" id="sceneFrame">
+              <canvas id="sceneCanvas"></canvas>
+              <div class="grid-plane"></div>
+              <div id="labelLayer" class="label-layer"></div>
+              <div id="lensLayer" class="lens-layer"></div>
+
+              <div class="viewport-badge">
+                <span id="viewModeLabel">Proyecto</span>
+                <strong id="zoomLabel">0.78x</strong>
+              </div>
+
+              <div class="semantic-ladder" id="semanticLadder">
+                <span class="ladder-step active" data-step="global">Proyecto</span>
+                <span class="ladder-step" data-step="systems">Sistemas</span>
+                <span class="ladder-step" data-step="element">Elemento</span>
+                <span class="ladder-step" data-step="calculation">Calculo</span>
+                <span class="ladder-step" data-step="evidence">Evidencia</span>
+              </div>
+
+              <div class="minimap" aria-hidden="true">
+                <div class="mini-span deck-mini"></div>
+                <div class="mini-span pier-mini"></div>
+                <div class="mini-span focus-mini" id="miniFocus"></div>
+              </div>
+            </div>
+
+            <div class="viewport-controls">
+              <button class="icon-button" id="zoomOutButton" type="button" aria-label="Zoom out">-</button>
+              <input id="zoomSlider" class="zoom-slider" type="range" min="60" max="470" value="78">
+              <button class="icon-button" id="zoomInButton" type="button" aria-label="Zoom in">+</button>
+              <button class="text-button" id="resetViewButton" type="button">Centrar</button>
+              <button class="text-button" id="runTraceButton" type="button">Trazar demanda</button>
+              <button class="text-button" id="docxTraceButton" type="button">Ver DOCX</button>
+            </div>
+          </section>
+
+          <section class="bottom-rail">
+            <div class="rail-card">
+              <span class="rail-label">Transaccion</span>
+              <strong>IA actualizo `design/flexure.py`</strong>
+              <span>sincronizado con Viga V-14 y tabla DOCX 4.2</span>
+            </div>
+            <div class="rail-card">
+              <span class="rail-label">Ruta critica</span>
+              <strong>DC + DW + 1.75LL</strong>
+              <span>controla momento positivo al 0.52L</span>
+            </div>
+            <div class="rail-card">
+              <span class="rail-label">Compatibilidad</span>
+              <strong>OpenXML nativo</strong>
+              <span>ecuaciones, captions y tablas trazables</span>
+            </div>
+          </section>
+        </main>
+
+        <aside class="right-panel panel">
+          <section class="inspector-header">
+            <div>
+              <div class="eyebrow">Inspector</div>
+              <h1 id="selectedTitle">Viga V-14</h1>
+            </div>
+            <span id="selectedStatus" class="status-pill status-warning">Warning</span>
+          </section>
+
+          <section class="panel-section tight">
+            <div class="metric-grid" id="metricGrid"></div>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-heading">
+              <span>Cadena visual</span>
+              <span class="chip">live graph</span>
+            </div>
+            <ol class="calc-chain" id="calcChain"></ol>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-heading">
+              <span>Evidencia</span>
+              <span class="chip" id="evidenceChip">Python</span>
+            </div>
+            <pre class="code-card" id="codeSnippet"></pre>
+          </section>
+
+          <section class="panel-section agent-panel">
+            <div class="section-heading">
+              <span>Agente conectado</span>
+              <span class="status-pill status-running">MCP</span>
+            </div>
+            <div class="agent-log" id="agentLog">
+              <div class="agent-message assistant">Selecciona una parte del modelo o pregunta por un chequeo.</div>
+            </div>
+            <form class="agent-form" id="agentForm">
+              <input id="agentInput" type="text" placeholder="Preguntar por la viga, formula o reporte">
+              <button type="submit">Enviar</button>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

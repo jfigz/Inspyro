@@ -431,7 +431,7 @@ class TestDocxBuilderTracking(unittest.TestCase):
             SimpleNamespace(filename="<inspyro-notebook:cell-exact>", lineno=21),
             SimpleNamespace(filename="<inspyro-notebook:cell-callsite>", lineno=9),
             SimpleNamespace(
-                filename=r"C:\Users\Usuario\AppData\Local\Temp\ipykernel_35784\2485563350.py",
+                filename=r"C:\tmp\ipykernel_35784\2485563350.py",
                 lineno=113,
             ),
         ]

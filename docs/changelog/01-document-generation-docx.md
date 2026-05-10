@@ -1,6 +1,18 @@
 ﻿# Changelog 01 - document-generation-docx
 
-> **Última actualización:** 2026-05-06
+> **Última actualización:** 2026-05-09
+
+---
+
+## 2026-05-09 - Word automatizado aislado de sesiones del usuario
+
+1. `pdf_converter.py` reemplaza la automatización `Dispatch("Word.Application")` por un runner común con `DispatchEx("Word.Application")`, captura de PIDs `WINWORD.EXE` preexistentes y validación del PID creado desde `Application.Hwnd` antes de abrir el DOCX.
+2. Si Word devuelve una instancia preexistente o no verificable mientras hay Word abierto, la ruta Word aborta sin cerrar documentos del usuario y el pipeline conserva el fallback LibreOffice.
+3. En timeouts, el proceso padre solo termina el PID registrado como instancia propia de Inspyro mediante sidecar; sin PID verificado, no mata ningún proceso.
+4. La ruta legacy `_convert_to_pdf_word()` delega en el mismo runner aislado, y los tests fijan `DispatchEx`, cleanup de PID propio, no-kill sin verificación y fallback por aislamiento.
+5. `test_word_conversion.py` queda como diagnóstico manual Windows COM para comprobar que una instancia Word controlada del usuario sobrevive a una conversión Inspyro.
+
+**Archivos:** `backend/app/services/pdf_converter.py`, `backend/tests/test_pdf_converter_hardening.py`, `backend/tests/test_word_conversion.py`, `docs/modules/01-document-generation-docx.md`, `docs/changelog/01-document-generation-docx.md`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`, `docs/architecture/system-context.md`, `docs/llm-index.yaml`
 
 ---
 

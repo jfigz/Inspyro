@@ -879,6 +879,66 @@
     font-weight: 500;
 }
 
+.word-complete-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 0;
+}
+
+.word-complete-tab {
+    border: 1px solid #303844;
+    border-radius: 4px;
+    background: #171d24;
+    color: #c7d0dd;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 6px 9px;
+}
+
+.word-complete-tab:hover,
+.word-complete-tab.active {
+    border-color: #4a90d9;
+    background: #1f2d3a;
+    color: #ffffff;
+}
+
+.word-complete-tab-panel {
+    border: 1px solid #26313d;
+    border-radius: 6px;
+    background: #151a20;
+    padding: 10px;
+}
+
+.word-control-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.word-mini-section {
+    border-top: 1px dashed #2a3542;
+    margin-top: 4px;
+    padding-top: 10px;
+}
+
+.word-raw-grid,
+.word-complete-readonly-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.checkbox-row {
+    align-items: center;
+    color: #cbd5e0;
+    display: flex;
+    font-size: 12px;
+    gap: 8px;
+}
+
+.checkbox-row input {
+    accent-color: #4a90d9;
+}
+
 .edit-row {
     display: flex;
     align-items: center;
@@ -1350,15 +1410,19 @@
     border-radius: 3px;
     box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: auto;
+    scrollbar-gutter: stable;
 }
 
 .template-internal-paragraph {
+    box-sizing: border-box;
     max-width: 100%;
+    min-width: 0;
     overflow-wrap: anywhere;
 }
 
 .template-internal-list {
+    box-sizing: border-box;
     padding-left: 1.25rem;
     overflow-wrap: anywhere;
 }
@@ -1381,7 +1445,9 @@
 
 .template-internal-table td {
     border: var(--template-table-border, 0.75pt solid #94a3b8);
+    background: var(--template-table-cell-bg, #fff);
     padding: var(--template-table-cell-padding, 4pt 6pt);
+    vertical-align: var(--template-table-cell-valign, middle);
     overflow-wrap: anywhere;
 }
 
@@ -2143,7 +2209,7 @@
 
 .template-editor-body {
     display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(280px, 340px);
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(360px, var(--template-preview-rail-width, 620px));
     flex: 1 1 auto;
     min-height: 0;
     background: var(--color-bg-primary, #111827);
@@ -2554,11 +2620,40 @@
 }
 
 .template-preview-rail {
+    position: relative;
     min-width: 0;
     overflow-y: auto;
     padding: var(--space-4, 16px);
     background: var(--color-bg-secondary, #101827);
     border-left: 1px solid var(--color-border-default, #253348);
+}
+
+.template-preview-rail-resizer {
+    position: absolute;
+    top: 0;
+    left: -5px;
+    z-index: 4;
+    width: 10px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+}
+
+.template-preview-rail-resizer::after {
+    content: "";
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    left: 4px;
+    width: 2px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 120ms ease;
+}
+
+.template-preview-rail-resizer:hover::after,
+.template-preview-rail.resizing .template-preview-rail-resizer::after {
+    background: var(--color-accent-primary, #60a5fa);
 }
 
 .template-preview-rail-header {
@@ -2573,6 +2668,11 @@
     background: var(--color-bg-secondary, #101827);
 }
 
+.template-preview-rail-header .preview-header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .template-preview-rail-header h3 {
     margin: 0;
     color: var(--color-text-primary, #f8fafc);
@@ -2582,12 +2682,78 @@
 }
 
 .preview-rail-frame {
-    height: 260px;
-    min-height: 260px;
-    max-height: 320px;
+    display: block;
+    height: min(72vh, 720px);
+    min-height: 420px;
+    max-height: none;
     border-radius: var(--radius-lg, 8px);
     background: var(--color-bg-tertiary, #0f172a);
     border-color: var(--color-border-default, #334155);
+    padding: 8px;
+    align-items: stretch;
+    justify-content: stretch;
+    overflow: auto;
+    scrollbar-gutter: stable both-edges;
+}
+
+.template-sample-docx-host {
+    width: max-content;
+    min-height: 100%;
+    min-width: 100%;
+    overflow: visible;
+    border-radius: calc(var(--radius-lg, 8px) - 2px);
+    background: #111827;
+}
+
+.template-sample-docx-host .docx-wrapper {
+    align-items: flex-start !important;
+    width: max-content;
+    min-width: max-content;
+    padding: 16px !important;
+    background: transparent !important;
+    box-sizing: border-box;
+}
+
+.template-sample-docx-host .docx {
+    margin: 0 0 16px !important;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32) !important;
+}
+
+.template-sample-docx-host table {
+    max-width: 100%;
+}
+
+.template-sample-preview-focus {
+    outline: 2px solid rgba(96, 165, 250, 0.95);
+    outline-offset: 3px;
+    background: rgba(96, 165, 250, 0.08);
+}
+
+.template-word-preview-pages {
+    display: grid;
+    gap: 16px;
+    width: 100%;
+    min-height: 100%;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.template-word-preview-page {
+    margin: 0;
+    width: 100%;
+    aspect-ratio: var(--word-page-aspect, 8.5 / 11);
+    background: #f8fafc;
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.template-word-preview-page .word-preview-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .preview-rail-empty {
@@ -2663,14 +2829,18 @@
 
     .template-preview-rail {
         grid-column: 1 / -1;
-        max-height: 300px;
+        max-height: 58vh;
         border-left: none;
         border-top: 1px solid var(--color-border-default, #253348);
     }
 
+    .template-preview-rail-resizer {
+        display: none;
+    }
+
     .preview-rail-frame {
-        height: 210px;
-        min-height: 210px;
+        height: 48vh;
+        min-height: 360px;
     }
 }
 
@@ -2711,6 +2881,12 @@
     .template-preview-rail {
         flex: 0 0 auto;
         overflow: visible;
+        max-height: none;
+    }
+
+    .preview-rail-frame {
+        height: 58vh;
+        min-height: 340px;
     }
 
     .edit-panel-header {

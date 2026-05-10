@@ -105,7 +105,7 @@ def test_word_style_roundtrip_applies_structured_ooxml(monkeypatch, tmp_path: Pa
         {
             "style_id": "Normal",
             "word_style": {
-                "metadata": {"ui_priority": 7},
+                "metadata": {"ui_priority": 7, "aliases": ["Body Copy"], "locked": True},
                 "visibility": {"q_format": True, "hidden": False},
                 "font": {
                     "complex_script_font_name": "Aptos",
@@ -116,6 +116,10 @@ def test_word_style_roundtrip_applies_structured_ooxml(monkeypatch, tmp_path: Pa
                 "paragraph": {
                     "contextual_spacing": True,
                     "tabs": [{"val": "right", "leader": "dot", "pos_twips": "4320"}],
+                    "shading": {"fill": "F2F2F2"},
+                    "borders": {
+                        "bottom": {"style": "single", "size_pt": 1.5, "color": "1B4965"},
+                    },
                 },
             },
         },
@@ -128,6 +132,8 @@ def test_word_style_roundtrip_applies_structured_ooxml(monkeypatch, tmp_path: Pa
     normal = styles_root.find("w:style[@w:styleId='Normal']", DOCX_NS)
     assert normal is not None
     assert normal.find("w:uiPriority", DOCX_NS).get(_qn("val")) == "7"
+    assert normal.find("w:aliases", DOCX_NS).get(_qn("val")) == "Body Copy"
+    assert normal.find("w:locked", DOCX_NS) is not None
     assert normal.find("w:qFormat", DOCX_NS) is not None
     assert normal.find("w:hidden", DOCX_NS) is None
     r_fonts = normal.find("w:rPr/w:rFonts", DOCX_NS)
@@ -140,7 +146,42 @@ def test_word_style_roundtrip_applies_structured_ooxml(monkeypatch, tmp_path: Pa
     assert tab.get(_qn("val")) == "right"
     assert tab.get(_qn("leader")) == "dot"
     assert tab.get(_qn("pos")) == "4320"
+    assert normal.find("w:pPr/w:shd", DOCX_NS).get(_qn("fill")) == "F2F2F2"
+    bottom_border = normal.find("w:pPr/w:pBdr/w:bottom", DOCX_NS)
+    assert bottom_border.get(_qn("val")) == "single"
+    assert bottom_border.get(_qn("sz")) == "12"
+    assert bottom_border.get(_qn("color")) == "1B4965"
 
     updated_normal = next(item for item in updated.get("styles", []) if item.get("style_id") == "Normal")
+    assert updated.get("word_capabilities", {}).get("paragraph")
+    assert updated_normal.get("word_style", {}).get("metadata", {}).get("aliases") == ["Body Copy"]
     assert updated_normal.get("word_style", {}).get("font", {}).get("complex_script_font_name") == "Aptos"
     assert updated_normal.get("word_style", {}).get("paragraph", {}).get("contextual_spacing") is True
+    assert updated_normal.get("word_style", {}).get("paragraph", {}).get("shading", {}).get("fill") == "F2F2F2"
+
+
+def test_word_style_rejects_malformed_raw_ooxml(monkeypatch, tmp_path: Path):
+    docx = pytest.importorskip("docx")
+
+    monkeypatch.setattr(template_service, "TEMPLATE_DIR", tmp_path)
+    kernel_id = "kernel-word-style-invalid-raw"
+    document = docx.Document()
+    document.add_paragraph("template")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    docx_bytes = buffer.getvalue()
+    template_service.save_template(
+        kernel_id,
+        docx_bytes,
+        template_service.extract_styles_from_docx(docx_bytes),
+    )
+
+    with pytest.raises(ValueError, match="invalid_advanced_props.r_pr"):
+        template_service.update_template_style(
+            kernel_id,
+            "Normal",
+            {
+                "style_id": "Normal",
+                "advanced_props": {"r_pr": {"tag": "b"}},
+            },
+        )

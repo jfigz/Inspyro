@@ -2,6 +2,7 @@ import base64
 import binascii
 import os
 import asyncio
+import zipfile
 from typing import Dict, Any, Optional
 
 from app.core.state import get_template_mutation_lock
@@ -59,7 +60,14 @@ def kernel_docx_reset_code() -> str:
 
 async def apply_template_bytes_to_kernel(*, kernel_id: str, docx_bytes: bytes) -> dict:
     """Extrae estilos, guarda la plantilla y la aplica en el kernel."""
-    extracted = await template_service.run_template_executor(template_extract.extract_styles_from_docx, docx_bytes)
+    try:
+        extracted = await template_service.run_template_executor(template_extract.extract_styles_from_docx, docx_bytes)
+    except zipfile.BadZipFile as exc:
+        raise TemplateValidationError(
+            f"Template DOCX is invalid or corrupt: {exc}",
+            "invalid_docx",
+            {"recoverable": True},
+        ) from exc
 
     mutation_lock = await get_template_mutation_lock(kernel_id)
     template_path = None

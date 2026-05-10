@@ -4,7 +4,39 @@
 
 > **Doc principal:** `docs/modules/19-mcp-server.md`
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-10
+
+---
+
+## 2026-05-10 - Saneo de presets MCP para release público
+
+### Contexto
+
+La auditoría de publicación pública detectó que el resource de configuración MCP incluía una ruta de ejemplo ligada al workspace privado usado durante desarrollo.
+
+### Cambios tecnicos
+
+1. `inspyro://guides/client-configuration` mantiene el preset `stdio`, pero reemplaza el `cwd` de ejemplo por una ruta neutral de workspace.
+2. La documentación del módulo deja explícito que los presets publicados no deben exponer rutas privadas del repositorio local ni del usuario que empaqueta el release.
+
+**Archivos:** `backend/mcp_server/resources/inspyro_resources.py`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/architecture/feature-threads.md`
+
+---
+
+## 2026-05-09 - Configuración universal para clientes MCP
+
+### Contexto
+
+La experiencia MCP debía dejar de verse como un flujo asociado a un cliente específico y explicar, desde la UI y desde MCP, cómo conectar Inspyro con cualquier IA agentica.
+
+### Cambios tecnicos
+
+1. `GET /api/mcp/status` agrega `configuration` con endpoint HTTP, host/puerto, perfil `authoring`, modo recomendado `stateful-http`, preset `stdio`, URLs backend REST/WS reales y advertencias de seguridad local.
+2. `mcp_start` lanza el subprocess heredando `INSPYRO_BACKEND_URL`, `INSPYRO_BACKEND_WS_URL` e `INSPYRO_BACKEND_NOTEBOOK_WS_URL`, evitando asumir backend `:8000` en desktop empaquetado con puerto dinámico.
+3. `inspyro://guides/client-configuration` queda publicado en el manifest y documenta Codex, Claude Code/Desktop, VS Code, Cursor, HTTP genérico, `stdio`, `stateful-http` y el límite de `stateless-http` para notebooks.
+4. La cobertura backend fija el manifest/resource nuevo y el snapshot de configuración/env del subprocess.
+
+**Archivos:** `backend/app/routers/mcp_manager.py`, `backend/mcp_server/server.py`, `backend/mcp_server/resources/inspyro_resources.py`, `backend/tests/test_mcp_ai_first.py`, `backend/tests/test_mcp_server_remediation.py`, `docs/modules/19-mcp-server.md`, `docs/changelog/19-mcp-server.md`, `docs/architecture/contracts-catalog.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/llm-index.yaml`
 
 ---
 

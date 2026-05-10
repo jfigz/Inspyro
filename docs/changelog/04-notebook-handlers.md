@@ -1,6 +1,6 @@
 ﻿# Changelog 04 - notebook-handlers
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-10
 
 ---
 
@@ -236,7 +236,7 @@
 
 2. La instrumentación notebook importa ahora `doc_start_cell`/`doc_finish_cell` y envuelve `build_doc` / `doc_block` / `doc_begin` para propagar `notebook_cell_id` a llamadas directas del usuario.
 
-3. La misma instrumentación publica la API DOCX activa en `builtins`, evitando que notebooks host-aware vuelvan al bootstrap legacy de `C:\CalcPyro\P1` cuando el host ya inyectó la implementación actual.
+3. La misma instrumentación publica la API DOCX activa en `builtins`, evitando que notebooks host-aware vuelvan a un bootstrap legacy ligado a una ruta local privada cuando el host ya inyectó la implementación actual.
 
 4. Esa propagación permite que `finish_notebook_cell()` elimine bloques DOCX stale al reejecutar una celda cuyo código ya no genera contenido documental.
 

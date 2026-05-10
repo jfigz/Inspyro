@@ -1,10 +1,18 @@
 ﻿# Generación de Documentos DOCX/PDF
 
 > **Estado:** ✅ Modularizado  
-> **Última actualización:** 2026-05-06
+> **Última actualización:** 2026-05-09
 > **Changelog:** `docs/changelog/01-document-generation-docx.md`
 
 Este documento cubre todo el pipeline de generación de documentos: desde la creación de DOCX hasta la conversión a PDF.
+
+## Aislamiento seguro de Microsoft Word automatizado (2026-05-09)
+
+- `pdf_converter.py` ya no automatiza Word con `Dispatch("Word.Application")`: toda conversión Word usa el subproceso con `DispatchEx("Word.Application")` para pedir una instancia COM nueva e independiente.
+- Antes de abrir el DOCX, el runner captura los PIDs `WINWORD.EXE` existentes y valida el PID de la instancia creada desde `Application.Hwnd`; si COM devuelve un PID preexistente o no verificable cuando hay Word abierto, aborta la ruta Word y deja que opere el fallback LibreOffice.
+- Si el subproceso de conversión expira, el proceso padre solo termina el PID registrado en el sidecar como instancia propia de Inspyro. Si no existe PID verificado, no mata ningún proceso Word.
+- Esta protección cubre notebooks, `force_reconvert_pdf`, Workbench/render visual, previews Word nativos del Template Editor y cualquier caller que pase por `convert_docx_with_diagnostics()` o `_convert_to_pdf_word_with_timeout()`.
+- `Word Live` queda excluido deliberadamente: ese flujo sigue interactuando con el Word visible del usuario porque su propósito es edición humana en vivo.
 
 ## Runtime Word-first de plantillas (2026-05-04)
 

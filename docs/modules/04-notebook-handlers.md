@@ -4,7 +4,7 @@
 
 > **Ubicación:** `backend/app/routers/notebook.py` (fachada) + `backend/app/routers/notebook_*.py`
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-10
 
 > **Changelog:** `docs/changelog/04-notebook-handlers.md`
 
@@ -151,7 +151,7 @@ Orquestar el ciclo de vida del notebook en backend: creación/carga/guardado, ej
 
 - La instrumentación notebook importa ahora `doc_start_cell`/`doc_finish_cell` y envuelve `build_doc` / `doc_block` / `doc_begin` para inyectar `notebook_cell_id` automáticamente en llamadas directas del usuario.
 
-- La misma instrumentación expone además la API DOCX activa en `builtins`, para que notebooks host-aware que primero intentan reutilizar `build_doc/doc_reset` del host no caigan al bootstrap legacy de `C:\CalcPyro\P1` y sigan generando el documento con la implementación vigente de P2.
+- La misma instrumentación expone además la API DOCX activa en `builtins`, para que notebooks host-aware que primero intentan reutilizar `build_doc/doc_reset` del host no caigan a un bootstrap legacy ligado a una ruta local privada y sigan generando el documento con la implementación vigente.
 
 - Con ese ownership consistente, la reejecución de una celda puede limpiar bloques DOCX viejos aunque el código actualizado ya no emita contenido documental.
 

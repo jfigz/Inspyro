@@ -248,6 +248,8 @@ def _inject_styles(
         "BancoTextoBase",
         "BancoTitulo",
         "BankWordComplete",
+        "Code",
+        "Caption",
     ):
         _remove_style(root, style_id)
 
@@ -255,6 +257,11 @@ def _inject_styles(
     body.append(_paragraph_props(alignment="both", contextual=True))
     body.append(_run_props(font="Aptos", color="243447", size_half_points=22))
     root.append(body)
+
+    caption = _style_base("Caption", "Caption", based_on="Normal", ui_priority=35, q_format=True)
+    caption.append(_paragraph_props(alignment="center", before=60, after=100, first_line=0))
+    caption.append(_run_props(font="Aptos", color="5C677D", size_half_points=20, italic=True))
+    root.append(caption)
 
     heading = _style_base(
         "BankHeading",
@@ -291,6 +298,11 @@ def _inject_styles(
         root.append(duplicate_b)
 
     root.append(_table_style_props())
+
+    code = _style_base("Code", "Code", based_on="Normal", ui_priority=33, q_format=True)
+    code.append(_paragraph_props(alignment="left", before=80, after=80, first_line=0))
+    code.append(_run_props(font="Consolas", color="2D3748", size_half_points=20))
+    root.append(code)
 
     if localized:
         localized_body = _style_base("BancoTextoBase", "Texto independiente banco", based_on="Normal", ui_priority=22, q_format=True)
@@ -336,6 +348,10 @@ def _inject_styles(
         )
         advanced_ppr.append(_w_element("textAlignment", {"val": "center"}))
         advanced_ppr.append(_w_element("bidi", {"val": 0}))
+        advanced_ppr.append(_w_element("shd", {"val": "clear", "color": "auto", "fill": "F2F2F2"}))
+        p_bdr = _w_element("pBdr")
+        p_bdr.append(_w_element("bottom", {"val": "single", "sz": 8, "space": 1, "color": "1B4965"}))
+        advanced_ppr.append(p_bdr)
         advanced.append(advanced_ppr)
         advanced.append(advanced_rpr)
         advanced.append(_w_element("rsid", {"val": "00E12ABC"}))

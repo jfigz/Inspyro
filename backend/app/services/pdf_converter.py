@@ -109,6 +109,234 @@ _pdf_word_executor = ThreadPoolExecutor(
 _pdf_word_async_gate = asyncio.Lock()
 
 _logger = logging.getLogger(__name__)
+_WORD_PID_SIDECAR_SUFFIX = ".word-pid.json"
+_WORD_DIAGNOSTIC_KEYS = (
+    "word_isolated",
+    "word_pid",
+    "word_existing_pids",
+    "word_cleanup_attempted",
+    "word_cleanup_succeeded",
+    "word_timeout_cleanup_attempted",
+    "word_timeout_cleanup_succeeded",
+    "word_timeout_cleanup_error",
+)
+
+_WORD_COM_RUNNER = r"""
+import csv
+import ctypes
+import json
+import os
+import subprocess
+import sys
+
+
+def _creationflags():
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _list_winword_pids():
+    if os.name != "nt":
+        return set(), None
+    try:
+        proc = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq WINWORD.EXE", "/FO", "CSV", "/NH"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=_creationflags(),
+        )
+    except Exception as exc:
+        return set(), f"tasklist_exception:{type(exc).__name__}:{exc}"
+    if proc.returncode != 0:
+        return set(), (proc.stderr or proc.stdout or f"tasklist_rc_{proc.returncode}").strip()
+
+    pids = set()
+    for row in csv.reader((proc.stdout or "").splitlines()):
+        if len(row) < 2:
+            continue
+        if row[0].strip().lower() != "winword.exe":
+            continue
+        try:
+            pids.add(int(row[1]))
+        except Exception:
+            pass
+    return pids, None
+
+
+def _pid_from_hwnd(hwnd):
+    try:
+        hwnd_int = int(hwnd)
+    except Exception:
+        return None
+    if hwnd_int <= 0:
+        return None
+    pid = ctypes.c_ulong()
+    try:
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd_int, ctypes.byref(pid))
+    except Exception:
+        return None
+    value = int(pid.value)
+    return value if value > 0 else None
+
+
+def _write_pid_sidecar(pid_path, payload):
+    if not pid_path:
+        return
+    try:
+        tmp_path = f"{pid_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+        os.replace(tmp_path, pid_path)
+    except Exception:
+        pass
+
+
+def _quit_word_application(word_app):
+    try:
+        word_app.Quit(SaveChanges=0)
+        return True
+    except TypeError:
+        try:
+            word_app.Quit()
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def run(docx_path, pdf_path, pid_path=None):
+    word_app = None
+    doc = None
+    word_pid = None
+    own_word_pid = False
+    cleanup_attempted = False
+    cleanup_succeeded = False
+    preexisting_pids, snapshot_error = _list_winword_pids()
+    if snapshot_error:
+        return {
+            "success": False,
+            "error": f"word_pid_snapshot_failed:{snapshot_error}",
+            "error_kind": "word_isolation",
+            "word_isolated": False,
+        }
+
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        word_app = win32com.client.DispatchEx("Word.Application")
+        word_app.Visible = False
+        word_app.DisplayAlerts = 0
+
+        try:
+            word_pid = _pid_from_hwnd(word_app.Hwnd)
+        except Exception:
+            word_pid = None
+
+        current_pids, current_error = _list_winword_pids()
+        new_pids = current_pids - preexisting_pids if not current_error else set()
+        if word_pid is None and len(new_pids) == 1:
+            word_pid = next(iter(new_pids))
+
+        if word_pid is None:
+            if not preexisting_pids and word_app is not None:
+                cleanup_attempted = True
+                cleanup_succeeded = _quit_word_application(word_app)
+                word_app = None
+            _write_pid_sidecar(pid_path, {
+                "pid": None,
+                "own_pid": False,
+                "preexisting_pids": sorted(preexisting_pids),
+                "cleanup_attempted": cleanup_attempted,
+                "cleanup_succeeded": cleanup_succeeded,
+            })
+            return {
+                "success": False,
+                "error": "word_instance_pid_unverified",
+                "error_kind": "word_isolation",
+                "word_isolated": False,
+                "word_existing_pids": sorted(preexisting_pids),
+                "word_cleanup_attempted": cleanup_attempted,
+                "word_cleanup_succeeded": cleanup_succeeded,
+            }
+
+        own_word_pid = word_pid not in preexisting_pids
+        _write_pid_sidecar(pid_path, {
+            "pid": word_pid,
+            "own_pid": own_word_pid,
+            "preexisting_pids": sorted(preexisting_pids),
+        })
+        if not own_word_pid:
+            word_app = None
+            return {
+                "success": False,
+                "error": "word_instance_reused_existing_pid",
+                "error_kind": "word_isolation",
+                "word_isolated": False,
+                "word_pid": word_pid,
+                "word_existing_pids": sorted(preexisting_pids),
+            }
+
+        doc = word_app.Documents.Open(os.path.abspath(docx_path), ReadOnly=True, AddToRecentFiles=False)
+        doc.ExportAsFixedFormat(
+            OutputFileName=os.path.abspath(pdf_path),
+            ExportFormat=17,
+            OpenAfterExport=False,
+            OptimizeFor=0,
+            CreateBookmarks=1,
+            DocStructureTags=True,
+        )
+        return {
+            "success": True,
+            "word_isolated": True,
+            "word_pid": word_pid,
+            "word_existing_pids": sorted(preexisting_pids),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "error_kind": type(exc).__name__,
+            "word_isolated": bool(own_word_pid),
+            "word_pid": word_pid,
+            "word_existing_pids": sorted(preexisting_pids),
+        }
+    finally:
+        if doc is not None:
+            try:
+                doc.Close(SaveChanges=0)
+            except Exception:
+                pass
+        if word_app is not None and own_word_pid:
+            cleanup_attempted = True
+            cleanup_succeeded = _quit_word_application(word_app)
+        try:
+            import pythoncom
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+        if pid_path and word_pid is not None:
+            _write_pid_sidecar(pid_path, {
+                "pid": word_pid,
+                "own_pid": own_word_pid,
+                "preexisting_pids": sorted(preexisting_pids),
+                "cleanup_attempted": cleanup_attempted,
+                "cleanup_succeeded": cleanup_succeeded,
+            })
+
+
+if __name__ == "__main__":
+    result = run(
+        sys.argv[1],
+        sys.argv[2],
+        sys.argv[3] if len(sys.argv) > 3 else None,
+    )
+    print(json.dumps(result), flush=True)
+"""
 
 
 def _approx_b64_size_bytes(b64_text: str) -> int:
@@ -136,6 +364,89 @@ def _inject_queue_wait_timing(
     updated_diag = dict(pdf_diag)
     updated_diag["stage_timings_ms"] = stage_timings_ms
     return updated_diag, pdf_b64, pdf_hash, from_cache
+
+
+def _word_pid_sidecar_path(pdf_path: str) -> str:
+    return f"{os.path.abspath(pdf_path)}{_WORD_PID_SIDECAR_SUFFIX}"
+
+
+def _read_word_pid_sidecar(pid_path: str) -> dict:
+    try:
+        with open(pid_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def _terminate_process_tree_windows(pid: int) -> dict:
+    cleanup = {
+        "word_timeout_cleanup_attempted": False,
+        "word_timeout_cleanup_succeeded": False,
+        "word_timeout_cleanup_error": None,
+    }
+    if os.name != "nt" or not pid or int(pid) <= 0:
+        cleanup["word_timeout_cleanup_error"] = "invalid_or_unsupported_pid"
+        return cleanup
+    cleanup["word_timeout_cleanup_attempted"] = True
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        proc = subprocess.run(
+            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            creationflags=flags,
+        )
+        cleanup["word_timeout_cleanup_succeeded"] = proc.returncode == 0
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or b"").decode(errors="ignore").strip()
+            cleanup["word_timeout_cleanup_error"] = detail or f"taskkill_rc_{proc.returncode}"
+    except Exception as exc:
+        cleanup["word_timeout_cleanup_error"] = f"{type(exc).__name__}:{exc}"
+    return cleanup
+
+
+def _cleanup_registered_word_timeout(pid_payload: dict) -> dict:
+    pid = pid_payload.get("pid")
+    own_pid = pid_payload.get("own_pid") is True
+    existing = set()
+    try:
+        existing = {int(value) for value in (pid_payload.get("preexisting_pids") or [])}
+    except Exception:
+        existing = set()
+    try:
+        pid_int = int(pid)
+    except Exception:
+        pid_int = 0
+
+    base = {
+        "word_timeout_cleanup_attempted": False,
+        "word_timeout_cleanup_succeeded": False,
+        "word_timeout_cleanup_error": None,
+        "word_pid": pid_int or None,
+        "word_isolated": bool(own_pid and pid_int and pid_int not in existing),
+    }
+    if not own_pid or not pid_int or pid_int in existing:
+        base["word_timeout_cleanup_error"] = "word_pid_not_verified_as_own"
+        return base
+    base.update(_terminate_process_tree_windows(pid_int))
+    return base
+
+
+def _word_diagnostics_from_result(result: dict | None) -> dict:
+    if not isinstance(result, dict):
+        return {}
+    return {key: result.get(key) for key in _WORD_DIAGNOSTIC_KEYS if key in result}
 
 
 def _build_docx_too_large_result(size_bytes: int) -> dict:
@@ -489,54 +800,8 @@ def validate_docx_structure(docx_b64: str) -> tuple[bool, str | None]:
 # =============================================================================
 
 def _convert_to_pdf_word(docx_path: str, pdf_path: str) -> dict:
-    """Intenta convertir DOCX a PDF usando Microsoft Word via COM."""
-    if not MS_WORD_AVAILABLE:
-        return {"success": False, "error": "word_unavailable"}
-    
-    word_app = None
-    doc = None
-    try:
-        # Initialize COM in this thread
-        pythoncom.CoInitialize()
-        # Create Word instance (headless)
-        word_app = win32com.client.Dispatch("Word.Application")
-        word_app.Visible = False
-        word_app.DisplayAlerts = 0  # wdAlertsNone
-        
-        abs_docx = os.path.abspath(docx_path)
-        abs_pdf = os.path.abspath(pdf_path)
-        
-        # Open document
-        doc = word_app.Documents.Open(abs_docx, ReadOnly=True, AddToRecentFiles=False)
-        
-        # wdExportFormatPDF = 17
-        doc.ExportAsFixedFormat(
-            OutputFileName=abs_pdf,
-            ExportFormat=17,
-            OpenAfterExport=False,
-            OptimizeFor=0,  # wdExportOptimizeForPrint
-            CreateBookmarks=1,  # wdExportCreateHeadingBookmarks
-            DocStructureTags=True
-        )
-        return {"success": True}
-        
-    except Exception as e:
-        return {"success": False, "error": str(e), "error_kind": type(e).__name__}
-    finally:
-        if doc:
-            try:
-                doc.Close(SaveChanges=0)  # wdDoNotSaveChanges
-            except Exception:
-                pass
-        if word_app:
-            try:
-                word_app.Quit()
-            except Exception:
-                pass
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
+    """Legacy sync wrapper that uses the isolated Word subprocess path."""
+    return _convert_to_pdf_word_with_timeout(docx_path, pdf_path, PDF_CONVERT_TIMEOUT_S)
 
 
 # =============================================================================
@@ -548,56 +813,16 @@ def _convert_to_pdf_word_with_timeout(docx_path: str, pdf_path: str, timeout_s: 
     if not MS_WORD_AVAILABLE:
         return {"success": False, "error": "word_unavailable"}
 
-    runner = """
-import json
-import os
-import sys
-
-def run(docx_path, pdf_path):
-    word_app = None
-    doc = None
-    try:
-        import pythoncom
-        import win32com.client
-        pythoncom.CoInitialize()
-        word_app = win32com.client.Dispatch("Word.Application")
-        word_app.Visible = False
-        word_app.DisplayAlerts = 0
-        doc = word_app.Documents.Open(os.path.abspath(docx_path), ReadOnly=True, AddToRecentFiles=False)
-        doc.ExportAsFixedFormat(
-            OutputFileName=os.path.abspath(pdf_path),
-            ExportFormat=17,
-            OpenAfterExport=False,
-            OptimizeFor=0,
-            CreateBookmarks=1,
-            DocStructureTags=True
-        )
-        return {"success": True}
-    except Exception as exc:
-        return {"success": False, "error": str(exc), "error_kind": type(exc).__name__}
-    finally:
-        if doc is not None:
-            try:
-                doc.Close(SaveChanges=0)
-            except Exception:
-                pass
-        if word_app is not None:
-            try:
-                word_app.Quit()
-            except Exception:
-                pass
-        try:
-            import pythoncom
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
-
-if __name__ == "__main__":
-    result = run(sys.argv[1], sys.argv[2])
-    print(json.dumps(result))
-"""
-
-    cmd = [sys.executable, "-c", runner, os.path.abspath(docx_path), os.path.abspath(pdf_path)]
+    pid_path = _word_pid_sidecar_path(pdf_path)
+    _unlink_quietly(pid_path)
+    cmd = [
+        sys.executable,
+        "-c",
+        _WORD_COM_RUNNER,
+        os.path.abspath(docx_path),
+        os.path.abspath(pdf_path),
+        pid_path,
+    ]
     try:
         proc = subprocess.run(
             cmd,
@@ -609,12 +834,22 @@ if __name__ == "__main__":
             errors="ignore",
         )
     except subprocess.TimeoutExpired:
-        return {"success": False, "error": f"word_timeout_{timeout_s}s", "error_kind": "timeout"}
+        pid_payload = _read_word_pid_sidecar(pid_path)
+        cleanup = _cleanup_registered_word_timeout(pid_payload)
+        _unlink_quietly(pid_path)
+        return {
+            "success": False,
+            "error": f"word_timeout_{timeout_s}s",
+            "error_kind": "timeout",
+            **cleanup,
+        }
     except Exception as exc:
+        _unlink_quietly(pid_path)
         return {"success": False, "error": f"word_subprocess_exception:{exc}", "error_kind": type(exc).__name__}
 
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
+    _unlink_quietly(pid_path)
     if proc.returncode != 0:
         err = stderr or stdout or f"word_subprocess_rc_{proc.returncode}"
         return {"success": False, "error": err[:800], "error_kind": "subprocess"}
@@ -734,6 +969,7 @@ def convert_docx_with_diagnostics(
     pdf_size = None
     converter_used = None  # NEW: Track which converter succeeded
     word_error = None      # NEW: Capture Word error details for frontend
+    word_diagnostics: dict[str, object] = {}
     
     with tempfile.TemporaryDirectory() as tmp:
         docx_path = os.path.join(tmp, 'in.docx')
@@ -769,6 +1005,7 @@ def convert_docx_with_diagnostics(
                         word_result = _convert_to_pdf_word_with_timeout(docx_path, pdf_path, timeout_s)
                     else:
                         word_result["repair_error"] = word_repair_error
+                word_diagnostics = _word_diagnostics_from_result(word_result)
             _logger.debug(f"Word result: {word_result}")
         else:
             _logger.debug(f"MS_WORD_AVAILABLE = False, skipping Word")
@@ -871,7 +1108,7 @@ def convert_docx_with_diagnostics(
             if len(_pdf_conversion_durations) > 500:
                 del _pdf_conversion_durations[:len(_pdf_conversion_durations) - 500]
 
-    return {
+    result = {
         "attempted": True,
         "pdf_b64": pdf_b64,
         "stdout": stdout_txt,
@@ -886,6 +1123,8 @@ def convert_docx_with_diagnostics(
         "max_docx_bytes": DOCX_MAX_BYTES,
         "stage_timings_ms": stage_timings_ms,
     }
+    result.update(word_diagnostics)
+    return result
 
 
 def convert_docx_b64_to_pdf_b64(docx_b64: str) -> str | None:

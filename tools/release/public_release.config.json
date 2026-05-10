@@ -1,0 +1,52 @@
+{
+  "source_repo": "../..",
+  "public_repo": "../Inspyro-public",
+  "webpage_dir": "Webpage/v3",
+  "github_repo": "jfigz/Inspyro",
+  "hostinger_domain": "openpyro.org",
+  "hostinger_remote_dir": "/public_html",
+  "version_files": [
+    "desktop/package.json",
+    "desktop/package-lock.json",
+    "frontend/package.json",
+    "frontend/package-lock.json"
+  ],
+  "denylist": {
+    "path_parts": [
+      ".codex",
+      ".inspyro",
+      ".playwright-mcp",
+      "_agent_runs",
+      "output",
+      "Docx_Documents",
+      "venv_inspyro",
+      "node_modules",
+      "__pycache__",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".cache",
+      "htmlcov",
+      ".coverage",
+      ".stage",
+      "dist",
+      "build"
+    ],
+    "path_globs": [
+      "frontend/build/**",
+      "desktop/.stage/**",
+      "desktop/dist/**",
+      "**/.env",
+      "**/.env.*",
+      "**/*.pem",
+      "**/*.key",
+      "**/id_rsa",
+      "**/id_ed25519",
+      "**/*_probe.py"
+    ]
+  },
+  "web": {
+    "cache_buster_date_format": "yyyyMMdd",
+    "hostinger_zip": "output/openpyro-v3-hostinger.zip"
+  }
+}

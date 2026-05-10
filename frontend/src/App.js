@@ -4447,6 +4447,7 @@ function App() {
     applyNotebookDocumentMessage,
     getPendingNotebookExecution,
     getNotebookConnectionStatusSafe,
+    handleStatusMessage,
     isNotebookEditorVisible,
     notifyNotebookBatchCompleted,
     notifyNotebookBatchFailed,
@@ -6729,7 +6730,7 @@ function App() {
       return;
     }
 
-    const sent = sendMessage(payload);
+    const sent = sendNotebookMessageSafe(activeNotebookTransportPath, payload);
     if (sent === false) {
       return;
     }
@@ -6748,7 +6749,7 @@ function App() {
     activeNotebookTemplateBlob,
     activeNotebookTransportPath,
     notebookKernelState.kernelId,
-    sendMessage,
+    sendNotebookMessageSafe,
     updateNotebookSession,
   ]);
 
@@ -7201,6 +7202,7 @@ function App() {
                         templateLastMessage={lastMessage}
                         templateInfo={activeNotebookTemplateInfo}
                         templateBinding={activeNotebookTemplateBinding}
+                        templateDocxBase64={activeNotebookTemplateBlob?.sourceBase64 || activeNotebookTemplateBlob?.legacyBase64 || ''}
                         onTemplateChange={(nextTemplateInfo) => {
                           if (!activeNotebookTransportPath) {
                             return;
@@ -7246,7 +7248,7 @@ function App() {
                           }
                           const sent = nextTemplateBlob?.attachSent
                             ? true
-                            : (payload ? sendMessage(payload) !== false : false);
+                            : (payload ? sendNotebookMessageSafe(activeNotebookTransportPath, payload) !== false : false);
                           updateNotebookSession(activeNotebookTransportPath, (previous) => ({
                             ...previous,
                             templateBlob: nextTemplateBlob,

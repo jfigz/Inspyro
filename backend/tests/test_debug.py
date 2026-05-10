@@ -14,7 +14,7 @@ WS_URL = os.getenv("INSPYRO_TEST_WS_URL", "ws://localhost:8000/ws")
 
 async def _run_debug_session() -> None:
     async with websockets.connect(WS_URL) as ws:
-        await ws.send(json.dumps({"type": "notebook_create", "cwd": r"c:\CalcPyro\P1"}))
+        await ws.send(json.dumps({"type": "notebook_create", "cwd": r"C:\Inspyro\Workspace"}))
 
         kernel_id = None
         cell_id = None

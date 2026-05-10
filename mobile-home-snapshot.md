@@ -1,0 +1,71 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - img "Inspyro brand mark" [ref=e8]:
+          - img [ref=e9]
+        - generic [ref=e83]:
+          - generic "P1" [ref=e84]
+          - button "Inicio" [pressed] [ref=e85] [cursor=pointer]
+      - generic [ref=e17]:
+        - generic [ref=e18]: Entender el proyecto
+        - generic [ref=e19]: Ejecutar cálculos
+        - generic [ref=e20]: Entregar informes
+      - generic [ref=e21]:
+        - button "Centro de notificaciones" [ref=e86] [cursor=pointer]:
+          - img [ref=e88]
+        - generic [ref=e29]: Conectado
+        - generic [ref=e30]:
+          - 'button "Agentes: sin conexión - :8100 Click: abrir panel de agentes | Shift+Click: iniciar/detener agentes" [ref=e91] [cursor=pointer]'
+          - button "Alternar vista activa de agentes" [ref=e40] [cursor=pointer]
+  - generic [ref=e42]:
+    - generic [ref=e92]:
+      - generic "Secciones laterales" [ref=e93]:
+        - button "Explorador de archivos" [ref=e94] [cursor=pointer]:
+          - img [ref=e95]
+        - button "Indice de notebook" [ref=e97] [cursor=pointer]:
+          - img [ref=e98]
+      - generic [ref=e103]:
+        - generic [ref=e104]:
+          - button "Ocultar explorador de archivos" [ref=e105] [cursor=pointer]
+          - generic [ref=e110]
+        - button "P1" [ref=e140] [cursor=pointer]:
+          - img [ref=e142]
+          - generic [ref=e146]: P1
+        - textbox "Quick open por nombre..." [ref=e148]
+        - generic [ref=e149]:
+          - generic [ref=e150]: Seleccion
+          - generic [ref=e151]: P1
+        - tree "Arbol de archivos del workspace" [ref=e153]:
+          - generic [ref=e154]
+    - region "Inicio del espacio de trabajo de agentes" [ref=e554]:
+      - generic [ref=e555]:
+        - generic [ref=e556]:
+          - generic [ref=e557]: Home compacta
+          - heading "P1" [level=1] [ref=e558]
+          - paragraph [ref=e559]: Understand -> Run -> Deliver deja visible el estado del workspace sin depender de un editor montado.
+        - generic [ref=e560]:
+          - generic [ref=e561]
+          - generic [ref=e567]
+      - region "Understand -> Run -> Deliver" [ref=e570]:
+        - generic [ref=e571]:
+          - generic [ref=e572]: Workspace loop
+          - heading "Understand -> Run -> Deliver" [level=2] [ref=e573]
+          - paragraph [ref=e574]: La home persistente explica el objetivo del producto y deja cada etapa a un click.
+        - generic [ref=e575]:
+          - article [ref=e576]
+          - article [ref=e584]
+          - article [ref=e592]
+      - generic [ref=e600]:
+        - generic [ref=e601]:
+          - generic [ref=e602]
+          - generic [ref=e618]
+        - generic [ref=e1360]:
+          - button "Run Detenido Clientes MCP Servicio detenido sin clientes ni runs activos todavia." [ref=e1361] [cursor=pointer]
+          - button "Expandir Clientes MCP" [ref=e1376] [cursor=pointer]
+        - generic [ref=e1380]:
+          - button "Deliver 8 recientes DOCX 8 entregas recientes listas para abrir." [ref=e1381] [cursor=pointer]
+          - button "Expandir DOCX" [ref=e1392] [cursor=pointer]
+        - generic [ref=e1396]:
+          - button "Format 1 attached Templates 1 de 37 notebooks con template persistido." [ref=e1397] [cursor=pointer]
+          - button "Expandir Templates" [ref=e1409] [cursor=pointer]

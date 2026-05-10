@@ -456,11 +456,23 @@ describe('StyleEditPanel font handling', () => {
     );
 
     fireEvent.click(screen.getByTestId('template-word-complete-toggle'));
-    fireEvent.change(screen.getByTestId('template-word-style-font'), {
-      target: { value: JSON.stringify({ complex_script_font_name: 'Aptos', character_spacing_twips: '20' }, null, 2) },
+    fireEvent.click(screen.getByTestId('template-word-tab-font'));
+    fireEvent.change(screen.getByTestId('template-word-font-complex-script'), {
+      target: { value: 'Aptos' },
     });
-    fireEvent.change(screen.getByTestId('template-word-style-paragraph'), {
-      target: { value: JSON.stringify({ contextual_spacing: true, tabs: [{ val: 'right', leader: 'dot', pos_twips: '4320' }] }, null, 2) },
+    fireEvent.change(screen.getByTestId('template-word-font-spacing'), {
+      target: { value: '20' },
+    });
+    fireEvent.click(screen.getByTestId('template-word-tab-paragraph'));
+    fireEvent.click(screen.getByTestId('template-word-paragraph-contextual-spacing'));
+    fireEvent.change(screen.getByTestId('template-word-paragraph-tab-pos'), {
+      target: { value: '4320' },
+    });
+    fireEvent.change(screen.getByTestId('template-word-paragraph-tab-val'), {
+      target: { value: 'right' },
+    });
+    fireEvent.change(screen.getByTestId('template-word-paragraph-tab-leader'), {
+      target: { value: 'dot' },
     });
     fireEvent.click(screen.getByText(/Guardar Cambios/i));
 

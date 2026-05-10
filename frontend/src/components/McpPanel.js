@@ -28,6 +28,121 @@ const getEventStatusLabel = (event) => {
   return 'En ejecución';
 };
 
+const jsonSnippet = (value) => JSON.stringify(value, null, 2);
+
+const buildMcpConfiguration = (mcpStatus, port) => {
+  const configuration = mcpStatus?.configuration || {};
+  const httpEndpoint = configuration.http_endpoint
+    || configuration.streamable_http?.url
+    || mcpStatus?.url
+    || `http://127.0.0.1:${port}/mcp`;
+  const backend = configuration.backend || {};
+  const backendUrl = backend.url || API_BASE || 'http://127.0.0.1:8000';
+  const backendWsUrl = backend.ws_url || backendUrl.replace(/^http/, 'ws').replace(/\/$/, '') + '/ws';
+  const notebookWsUrl = backend.notebook_ws_url || backendWsUrl.replace(/\/ws$/, '/ws/notebook');
+  const stdio = configuration.stdio || {};
+
+  return {
+    ...configuration,
+    httpEndpoint,
+    defaultProfile: configuration.default_profile || 'authoring',
+    recommendedMode: configuration.recommended_mode || 'stateful-http',
+    localOnly: configuration.local_only !== false,
+    backend: {
+      url: backendUrl,
+      ws_url: backendWsUrl,
+      notebook_ws_url: notebookWsUrl,
+    },
+    stdio: {
+      command: stdio.command || 'python',
+      args: Array.isArray(stdio.args) && stdio.args.length > 0 ? stdio.args : ['-m', 'mcp_server', '--stdio'],
+      cwd: stdio.cwd || 'C:\\Inspyro\\Workspace\\backend',
+    },
+    streamableHttp: {
+      stateful: configuration.streamable_http?.stateful !== false,
+      stateless_http: configuration.streamable_http?.stateless_http === true,
+      json_response: configuration.streamable_http?.json_response === true,
+    },
+    warnings: Array.isArray(configuration.warnings) ? configuration.warnings : [],
+  };
+};
+
+const buildClientPresets = (mcpConfig) => {
+  const env = {
+    INSPYRO_BACKEND_URL: mcpConfig.backend.url,
+    INSPYRO_BACKEND_WS_URL: mcpConfig.backend.ws_url,
+    INSPYRO_BACKEND_NOTEBOOK_WS_URL: mcpConfig.backend.notebook_ws_url,
+  };
+  const stdioServer = {
+    mcpServers: {
+      inspyro: {
+        command: mcpConfig.stdio.command,
+        args: mcpConfig.stdio.args,
+        cwd: mcpConfig.stdio.cwd,
+        env,
+      },
+    },
+  };
+
+  return [
+    {
+      key: 'codex',
+      title: 'Codex',
+      description: 'HTTP stateful. Úsalo cuando el servicio local esté iniciado desde Inspyro.',
+      body: `[mcp_servers.inspyro]\nurl = "${mcpConfig.httpEndpoint}"`,
+    },
+    {
+      key: 'claude-code',
+      title: 'Claude Code',
+      description: 'HTTP stateful con el cliente CLI de Claude.',
+      body: `claude mcp add-json inspyro '{"type":"http","url":"${mcpConfig.httpEndpoint}"}'`,
+    },
+    {
+      key: 'claude-desktop',
+      title: 'Claude Desktop',
+      description: 'stdio. Claude Desktop lanza su propio proceso MCP con estas variables.',
+      body: jsonSnippet(stdioServer),
+    },
+    {
+      key: 'vscode',
+      title: 'VS Code',
+      description: 'Archivo .vscode/mcp.json o configuración equivalente de MCP.',
+      body: jsonSnippet({
+        servers: {
+          inspyro: {
+            type: 'http',
+            url: mcpConfig.httpEndpoint,
+          },
+        },
+      }),
+    },
+    {
+      key: 'cursor',
+      title: 'Cursor',
+      description: 'Archivo mcp.json de Cursor con servidor HTTP local.',
+      body: jsonSnippet({
+        mcpServers: {
+          inspyro: {
+            url: mcpConfig.httpEndpoint,
+          },
+        },
+      }),
+    },
+    {
+      key: 'generic-http',
+      title: 'HTTP genérico',
+      description: 'Para clientes propios o integraciones MCP compatibles con Streamable HTTP.',
+      body: [
+        `Endpoint: ${mcpConfig.httpEndpoint}`,
+        'Transporte: Streamable HTTP',
+        `Modo: ${mcpConfig.recommendedMode}`,
+        `Perfil inicial: ${mcpConfig.defaultProfile}`,
+        'Sesión: reutilizar Mcp-Session-Id cuando el cliente lo exponga',
+      ].join('\n'),
+    },
+  ];
+};
+
 export default function McpPanel({
   isOpen,
   onClose,
@@ -47,6 +162,7 @@ export default function McpPanel({
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('activity');
+  const [copiedKey, setCopiedKey] = useState(null);
   const logsEndRef = useRef(null);
   const pollRef = useRef(null);
 
@@ -108,6 +224,16 @@ export default function McpPanel({
     setLoading(false);
   }, [fetchLogs, fetchStatus, onQuickAction]);
 
+  const copySnippet = useCallback(async (key, value) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1600);
+    } catch {
+      setCopiedKey(null);
+    }
+  }, []);
+
   if (!isOpen) return null;
 
   const isRunning = mcpStatus?.status === 'running';
@@ -135,6 +261,8 @@ export default function McpPanel({
   const effectiveRunningCount = normalizedClientFilterId || normalizedClientFilterLabel
     ? filteredActiveRuns.length
     : runningCount;
+  const mcpConfig = buildMcpConfiguration(mcpStatus, port);
+  const clientPresets = buildClientPresets(mcpConfig);
 
   return (
     <div className="mcp-panel-overlay" onClick={onClose}>
@@ -292,7 +420,7 @@ export default function McpPanel({
               <div className="mcp-info-row">
                 <span className="mcp-info-label">Punto de acceso</span>
                 <span className="mcp-info-value mcp-url">
-                  {isRunning ? `http://127.0.0.1:${port}/mcp` : '-'}
+                  {isRunning ? mcpConfig.httpEndpoint : '-'}
                 </span>
               </div>
               <div className="mcp-info-row">
@@ -315,7 +443,7 @@ export default function McpPanel({
               {isRunning && (
                 <div className="mcp-connect-hint">
                   <strong>Conecta un cliente MCP:</strong>
-                  <code>http://127.0.0.1:{port}/mcp</code>
+                  <code>{mcpConfig.httpEndpoint}</code>
                 </div>
               )}
             </div>
@@ -345,24 +473,75 @@ export default function McpPanel({
 
           {activeTab === 'config' && (
             <div className="mcp-config-grid">
-              <div className="mcp-info-row">
-                <span className="mcp-info-label">INSPYRO_MCP_PORT</span>
-                <span className="mcp-info-value">{port}</span>
+              <div className="mcp-config-summary">
+                <div className="mcp-config-status-card" data-testid="mcp-config-http-status">
+                  <span className={`mcp-panel-dot ${isRunning ? 'running' : 'stopped'}`} />
+                  <div>
+                    <strong>{isRunning ? 'Servicio HTTP iniciado' : 'Servicio HTTP detenido'}</strong>
+                    <span>{isRunning ? 'Los clientes HTTP pueden conectarse ahora.' : 'Inicia agentes antes de usar presets HTTP.'}</span>
+                  </div>
+                </div>
+                <div className="mcp-config-status-card">
+                  <span className="mcp-panel-dot running" />
+                  <div>
+                    <strong>stdio independiente</strong>
+                    <span>El cliente lanza su propio proceso; no depende del botón iniciar.</span>
+                  </div>
+                </div>
               </div>
-              <div className="mcp-info-row">
-                <span className="mcp-info-label">INSPYRO_MCP_HOST</span>
-                <span className="mcp-info-value">127.0.0.1</span>
+
+              <div className="mcp-config-section">
+                <div className="mcp-config-section-title">Parámetros mínimos</div>
+                <div className="mcp-info-row">
+                  <span className="mcp-info-label">Endpoint HTTP</span>
+                  <span className="mcp-info-value mcp-url" data-testid="mcp-config-endpoint">{mcpConfig.httpEndpoint}</span>
+                </div>
+                <div className="mcp-info-row">
+                  <span className="mcp-info-label">Modo recomendado</span>
+                  <span className="mcp-info-value">{mcpConfig.recommendedMode}</span>
+                </div>
+                <div className="mcp-info-row">
+                  <span className="mcp-info-label">Perfil por defecto</span>
+                  <span className="mcp-info-value">{mcpConfig.defaultProfile}</span>
+                </div>
+                <div className="mcp-info-row">
+                  <span className="mcp-info-label">Backend REST</span>
+                  <span className="mcp-info-value">{mcpConfig.backend.url}</span>
+                </div>
+                <div className="mcp-info-row">
+                  <span className="mcp-info-label">Backend WS notebooks</span>
+                  <span className="mcp-info-value">{mcpConfig.backend.notebook_ws_url}</span>
+                </div>
               </div>
-              <div className="mcp-info-row">
-                <span className="mcp-info-label">INSPYRO_BACKEND_URL</span>
-                <span className="mcp-info-value">{API_BASE}</span>
-              </div>
-              <div className="mcp-info-row">
-                <span className="mcp-info-label">Transporte</span>
-                <span className="mcp-info-value">Streamable HTTP</span>
-              </div>
+
               <div className="mcp-config-note">
-                La superficie visible del producto son los agentes. El transporte y el protocolo siguen siendo MCP por debajo.
+                Para notebooks usa HTTP con sesión o stdio. El modo stateless-http no conserva kernels, notebooks ni artefactos entre llamadas.
+                Mantén el host en 127.0.0.1 salvo que tengas controles de red y autenticación propios.
+              </div>
+
+              <div className="mcp-config-section">
+                <div className="mcp-config-section-title">Presets copiables</div>
+                <div className="mcp-preset-list">
+                  {clientPresets.map((preset) => (
+                    <div className="mcp-preset-card" key={preset.key} data-testid={`mcp-client-preset-${preset.key}`}>
+                      <div className="mcp-preset-header">
+                        <div>
+                          <strong>{preset.title}</strong>
+                          <span>{preset.description}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="mcp-copy-btn"
+                          onClick={() => void copySnippet(preset.key, preset.body)}
+                          data-testid={`mcp-copy-${preset.key}`}
+                        >
+                          {copiedKey === preset.key ? 'Copiado' : 'Copiar'}
+                        </button>
+                      </div>
+                      <pre className="mcp-config-snippet">{preset.body}</pre>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}

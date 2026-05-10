@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
@@ -58,6 +59,132 @@ def _find_venv_python() -> str:
 _VENV_PYTHON = _find_venv_python()
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _connectable_host(host: str | None) -> str:
+    normalized = (host or "").strip()
+    if normalized in {"", "0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return normalized
+
+
+def _mcp_host() -> str:
+    return os.getenv("INSPYRO_MCP_HOST", "127.0.0.1")
+
+
+def _mcp_port() -> int:
+    return _env_int("INSPYRO_MCP_PORT", 8100)
+
+
+def _mcp_http_endpoint() -> str:
+    host = _connectable_host(_mcp_host())
+    return f"http://{host}:{_mcp_port()}/mcp"
+
+
+def _backend_http_url() -> str:
+    explicit = os.getenv("INSPYRO_BACKEND_URL")
+    if explicit:
+        return explicit.rstrip("/")
+
+    host = _connectable_host(os.getenv("INSPYRO_BACKEND_HOST", "127.0.0.1"))
+    port = _env_int("INSPYRO_BACKEND_PORT", _env_int("PORT", 8000))
+    return f"http://{host}:{port}"
+
+
+def _backend_ws_url(path: str, *, env_name: str | None = None) -> str:
+    explicit = os.getenv(env_name) if env_name else None
+    if explicit:
+        return explicit.rstrip("/")
+
+    backend_url = _backend_http_url()
+    parsed = urlparse(backend_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return urlunparse((scheme, parsed.netloc, normalized_path, "", "", ""))
+
+
+def _mcp_backend_urls() -> dict[str, str]:
+    return {
+        "url": _backend_http_url(),
+        "ws_url": _backend_ws_url("/ws", env_name="INSPYRO_BACKEND_WS_URL"),
+        "notebook_ws_url": _backend_ws_url(
+            "/ws/notebook",
+            env_name="INSPYRO_BACKEND_NOTEBOOK_WS_URL",
+        ),
+    }
+
+
+def _mcp_subprocess_env() -> dict[str, str]:
+    """Entorno que hereda el servidor MCP lanzado desde el backend."""
+    env = os.environ.copy()
+    backend_urls = _mcp_backend_urls()
+    env["INSPYRO_BACKEND_URL"] = backend_urls["url"]
+    env["INSPYRO_BACKEND_WS_URL"] = backend_urls["ws_url"]
+    env["INSPYRO_BACKEND_NOTEBOOK_WS_URL"] = backend_urls["notebook_ws_url"]
+    env.setdefault("INSPYRO_MCP_HOST", _mcp_host())
+    env.setdefault("INSPYRO_MCP_PORT", str(_mcp_port()))
+    return env
+
+
+def _mcp_configuration_snapshot() -> dict:
+    host = _mcp_host()
+    port = _mcp_port()
+    http_endpoint = _mcp_http_endpoint()
+    backend_urls = _mcp_backend_urls()
+    normalized_host = (host or "").strip().lower()
+    local_only = normalized_host in {"", "127.0.0.1", "localhost", "::1"}
+    stateless_http = _env_bool("INSPYRO_MCP_STATELESS_HTTP")
+    return {
+        "host": host,
+        "port": port,
+        "http_endpoint": http_endpoint,
+        "default_profile": os.getenv("INSPYRO_MCP_DEFAULT_PROFILE", "authoring"),
+        "recommended_mode": "stateful-http",
+        "local_only": local_only,
+        "streamable_http": {
+            "url": http_endpoint,
+            "stateful": not stateless_http,
+            "recommended": True,
+            "json_response": _env_bool("INSPYRO_MCP_JSON_RESPONSE"),
+            "stateless_http": stateless_http,
+        },
+        "stdio": {
+            "command": _VENV_PYTHON,
+            "args": ["-m", "mcp_server", "--stdio"],
+            "cwd": str(_BACKEND_DIR),
+        },
+        "backend": backend_urls,
+        "environment": {
+            "INSPYRO_MCP_HOST": host,
+            "INSPYRO_MCP_PORT": str(port),
+            "INSPYRO_BACKEND_URL": backend_urls["url"],
+            "INSPYRO_BACKEND_WS_URL": backend_urls["ws_url"],
+            "INSPYRO_BACKEND_NOTEBOOK_WS_URL": backend_urls["notebook_ws_url"],
+            "INSPYRO_MCP_DEFAULT_PROFILE": os.getenv("INSPYRO_MCP_DEFAULT_PROFILE", "authoring"),
+        },
+        "warnings": [
+            "Mantener INSPYRO_MCP_HOST en 127.0.0.1 salvo que se agregue autenticacion y controles de red.",
+            "Para notebooks usa stateful-http o stdio; stateless-http crea sesiones efimeras y no conserva kernels.",
+            "Un cliente stdio lanza su propio proceso MCP; el boton de iniciar/detener solo controla el servicio HTTP local.",
+        ],
+    }
+
+
 def _stream_reader_thread(stream, prefix: str) -> None:
     """Lee líneas del subprocess en un thread y las agrega al buffer circular."""
     try:
@@ -87,14 +214,14 @@ def get_mcp_server_snapshot() -> dict:
     if running and _mcp_started_at:
         uptime = round(time.time() - _mcp_started_at, 1)
 
-    port = int(os.getenv("INSPYRO_MCP_PORT", "8100"))
     return {
         "status": "running" if running else "stopped",
         "pid": _mcp_process.pid if running else None,
-        "port": port,
+        "port": _mcp_port(),
         "uptime_seconds": uptime,
-        "url": f"http://127.0.0.1:{port}/mcp" if running else None,
+        "url": _mcp_http_endpoint() if running else None,
         "log_lines": len(_mcp_log_buffer),
+        "configuration": _mcp_configuration_snapshot(),
     }
 
 
@@ -142,14 +269,18 @@ async def mcp_start():
     global _mcp_process, _mcp_started_at
 
     if _is_running():
-        return {"status": "already_running", "pid": _mcp_process.pid}
+        return {
+            "status": "already_running",
+            "pid": _mcp_process.pid,
+            "configuration": _mcp_configuration_snapshot(),
+        }
 
     _mcp_log_buffer.clear()
     _mcp_log_buffer.append("[system] Iniciando servidor MCP...")
     _mcp_log_buffer.append(f"[system] Python: {_VENV_PYTHON}")
     _mcp_log_buffer.append(f"[system] CWD: {_BACKEND_DIR}")
 
-    port = int(os.getenv("INSPYRO_MCP_PORT", "8100"))
+    port = _mcp_port()
     _free_port(port)
 
     try:
@@ -158,12 +289,18 @@ async def mcp_start():
         if sys.platform == "win32":
             creation_flags = subprocess.CREATE_NO_WINDOW
 
+        process_env = _mcp_subprocess_env()
+        _mcp_log_buffer.append(f"[system] MCP endpoint: {_mcp_http_endpoint()}")
+        _mcp_log_buffer.append(f"[system] Backend URL: {process_env['INSPYRO_BACKEND_URL']}")
+        _mcp_log_buffer.append(f"[system] Backend WS: {process_env['INSPYRO_BACKEND_WS_URL']}")
+
         _mcp_process = subprocess.Popen(
             [_VENV_PYTHON, "-m", "mcp_server"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=str(_BACKEND_DIR),
             creationflags=creation_flags,
+            env=process_env,
         )
         _mcp_started_at = time.time()
 
@@ -195,7 +332,8 @@ async def mcp_start():
         return {
             "status": "started",
             "pid": _mcp_process.pid,
-            "port": int(os.getenv("INSPYRO_MCP_PORT", "8100")),
+            "port": _mcp_port(),
+            "configuration": _mcp_configuration_snapshot(),
         }
 
     except Exception as exc:

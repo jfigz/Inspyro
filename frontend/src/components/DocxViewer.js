@@ -651,6 +651,7 @@ const DocxViewer = ({
   onRetryPdf, onStatusMessage, kernelId = null, sendMessage = null, lastMessage = null,
   templateSendMessage = null, templateLastMessage = null, templateInfo = null,
   templateBinding = null,
+  templateDocxBase64 = '',
   onTemplateChange = null, onTemplateUpload = null, onTemplateBind = null, onRequestKernelStart = null, onTemplateOpenHandled = null, onNavigateToCode = null, isVisible = true,
   templateOpenRequest = null, qualityOpenRequest = null,
 }) => {
@@ -2384,7 +2385,7 @@ const DocxViewer = ({
               </>
             )}
         </div>
-        {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
+        {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} templateDocxBase64={templateDocxBase64} enableTemplateSourceFetch />}
       </div>
     );
   }
@@ -3035,7 +3036,7 @@ const DocxViewer = ({
         )}
       </div>
 
-      {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} />}
+      {showTemplateModal && <TemplateEditor templateInfo={templateInfo} templateBinding={templateBinding} kernelId={kernelId} sendMessage={templateSendMessage || sendMessage} lastMessage={templateLastMessage || lastMessage} onClose={() => setShowTemplateModal(false)} onTemplateChange={onTemplateChange} onStatusMessage={onStatusMessage} onTemplateUpload={onTemplateUpload} onTemplateBind={onTemplateBind} isOpeningPersistedTemplate={isOpeningPersistedTemplate} templateDocxBase64={templateDocxBase64} enableTemplateSourceFetch />}
     </div>
   );
 };

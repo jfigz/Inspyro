@@ -2,7 +2,7 @@
 
 > **Estado:** ✅ Núcleo estable
 > **Ubicación:** `frontend/src/App.js`
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 > **Changelog:** `docs/changelog/14-main-app.md`
 
 ---
@@ -10,6 +10,13 @@
 ## Propósito sistémico
 
 Actuar como shell principal de la aplicación: layout global, selección de modo (code/notebook), bootstrap del workspace activo, wiring de hooks (`useFileSystem`, `useAppWebSocket`, `useMcpActivity`, `useMcpShellControls`, `useMcpMirror`), integración desktop-aware con `window.inspyroDesktop` y coordinación entre paneles, notificaciones y controles MCP. El shell mantiene dos superficies frontend-locales (`home` y `file`), pero la home persistente del workspace ya se hidrata desde un snapshot backend shell-owned (`GET /api/system/home-summary`) en vez de depender del estado montado del notebook o de stores frontend legacy.
+
+## 2026-05-09 - Configuración universal MCP en Agents
+
+- `McpPanel` suma una pestaña `Configuración` orientada a usuarios inexpertos: diferencia servicio HTTP iniciado/detenido de clientes `stdio`, muestra endpoint real, modo recomendado `stateful-http`, perfil `authoring`, backend REST/WS y límites de seguridad local.
+- La UI consume `GET /api/mcp/status.configuration` para renderizar presets copiables de Codex, Claude Code, Claude Desktop, VS Code, Cursor y un cliente HTTP genérico sin asumir puerto backend fijo.
+- Los snippets HTTP usan el servicio local `http://127.0.0.1:<puerto>/mcp`; el preset `stdio` incluye `command`, `args`, `cwd` y las variables `INSPYRO_BACKEND_*` que el usuario debe configurar si su cliente lanza un proceso propio.
+- La pestaña explicita que `stateless-http` no sirve para notebooks porque no conserva kernels ni artefactos, y que el MCP debe permanecer local-only salvo configuración de red/autenticación fuera del alcance actual.
 
 ## 2026-05-08 - Plantilla JSON anidada al notebook
 

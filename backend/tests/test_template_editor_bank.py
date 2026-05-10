@@ -127,6 +127,8 @@ def _assert_word_complete_ooxml(docx_path: Path) -> None:
     assert tab.get(_qn("leader")) == "dot"
     assert tab.get(_qn("pos")) == "4320"
     assert style.find("w:pPr/w:contextualSpacing", DOCX_NS) is not None
+    assert style.find("w:pPr/w:shd", DOCX_NS).get(_qn("fill")) == "F2F2F2"
+    assert style.find("w:pPr/w:pBdr/w:bottom", DOCX_NS).get(_qn("color")) == "1B4965"
 
 
 def test_template_editor_bank_backend_roundtrip(isolated_template_storage, tmp_path: Path) -> None:
@@ -162,6 +164,9 @@ def test_template_editor_bank_backend_roundtrip(isolated_template_storage, tmp_p
                 word_complete = _style_by_id(extracted, "BankWordComplete")
                 assert word_complete is not None
                 assert word_complete.get("word_style", {}).get("paragraph", {}).get("tabs")
+                assert word_complete.get("word_style", {}).get("paragraph", {}).get("shading", {}).get("fill") == "F2F2F2"
+                assert word_complete.get("word_style", {}).get("paragraph", {}).get("borders", {}).get("bottom")
+                assert extracted.get("word_capabilities", {}).get("font")
 
             assert template_service.save_template(kernel_id, docx_bytes, extracted)
             saved_path = Path(template_service.get_template_docx_path(kernel_id) or "")
@@ -219,6 +224,8 @@ def test_template_editor_bank_backend_roundtrip(isolated_template_storage, tmp_p
                             "paragraph": {
                                 "contextual_spacing": True,
                                 "tabs": [{"val": "right", "leader": "dot", "pos_twips": "4320"}],
+                                "shading": {"fill": "F2F2F2"},
+                                "borders": {"bottom": {"style": "single", "size_pt": 1.0, "color": "1B4965"}},
                             },
                             "raw": {"bankUnsupportedProbe": {"preserve": True}},
                         },
@@ -326,3 +333,48 @@ def test_template_editor_bank_upload_attach_and_corrupt_recovery(isolated_templa
         )
     finally:
         report.write()
+
+
+def test_template_editor_corrupt_attach_returns_recoverable_error(isolated_template_storage) -> None:
+    token_payload = template_tokens.store_template_bytes(build_corrupt_docx_bytes(), filename="corrupt.docx")
+
+    with pytest.raises(template_logic.TemplateValidationError) as exc_info:
+        asyncio.run(template_logic.process_template_attach("bank-corrupt-attach", token_payload["template_token"]))
+
+    assert exc_info.value.error_code == "invalid_docx"
+    assert exc_info.value.extra.get("recoverable") is True
+    assert "zip" in str(exc_info.value).lower()
+    assert template_service.get_template("bank-corrupt-attach") is None
+
+
+def test_template_editor_word_native_preview_returns_non_empty_png(monkeypatch, isolated_template_storage) -> None:
+    fitz = pytest.importorskip("fitz")
+    from app.services import pdf_converter
+
+    def fake_word_convert(docx_path: str, pdf_path: str, timeout_s: int) -> dict:
+        doc = fitz.open()
+        page = doc.new_page(width=360, height=180)
+        page.insert_text((36, 72), "Preview Word nativo", fontsize=18, color=(0, 0, 0))
+        page.draw_rect(fitz.Rect(32, 54, 304, 88), color=(0.1, 0.25, 0.45), width=0.8)
+        doc.save(pdf_path)
+        doc.close()
+        return {"success": True, "converter_used": "word"}
+
+    monkeypatch.setattr(pdf_converter, "MS_WORD_AVAILABLE", True)
+    monkeypatch.setattr(pdf_converter, "_convert_to_pdf_word_with_timeout", fake_word_convert)
+
+    preview_b64 = template_service.generate_style_preview(
+        "bank-word-native-preview",
+        "Normal",
+        {
+            "style_id": "Normal",
+            "font_size_pt": 12,
+            "_preview_engine": "word_native",
+            "native_word_preview": True,
+        },
+    )
+
+    assert preview_b64
+    png_bytes = base64.b64decode(preview_b64)
+    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    assert len(png_bytes) > 500

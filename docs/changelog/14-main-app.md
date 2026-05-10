@@ -1,6 +1,17 @@
 ﻿# Changelog 14 - main-app
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
+
+---
+
+## 2026-05-09 - Presets universales MCP en Agents
+
+1. `McpPanel` agrega una pestaña `Configuración` que distingue servicio HTTP iniciado/detenido de clientes `stdio` que lanzan su propio proceso.
+2. La UI consume `GET /api/mcp/status.configuration` para mostrar endpoint real, perfil `authoring`, modo `stateful-http`, backend REST/WS y snippets copiables para Codex, Claude Code, Claude Desktop, VS Code, Cursor y HTTP genérico.
+3. Los textos de ayuda explicitan que `stateless-http` no conserva notebooks/kernels/artefactos y que el servidor debe seguir local-only (`127.0.0.1`) salvo hardening de red externo.
+4. Las regresiones unitarias y E2E cubren la pestaña de configuración, presets y endpoint mostrado junto con el flujo existente start/stop/activity.
+
+**Archivos:** `frontend/src/components/McpPanel.js`, `frontend/src/components/McpPanel.css`, `frontend/src/components/McpPanel.test.js`, `frontend/tests/mcp-ui.spec.ts`, `docs/modules/14-main-app.md`, `docs/changelog/14-main-app.md`, `docs/architecture/frontend-flow.md`, `docs/architecture/feature-threads.md`, `docs/architecture/synergy-matrix.md`, `docs/architecture/contracts-catalog.md`, `docs/llm-index.yaml`
 
 ---
 

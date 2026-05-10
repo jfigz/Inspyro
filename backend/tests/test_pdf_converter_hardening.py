@@ -97,6 +97,129 @@ class PdfConverterHardeningTests(unittest.TestCase):
         )
         self.assertFalse(pdf_converter._looks_like_word_corruption_error("timeout"))
 
+    def test_word_com_runner_uses_dispatch_ex_only(self):
+        runner = pdf_converter._WORD_COM_RUNNER
+
+        self.assertIn('win32com.client.DispatchEx("Word.Application")', runner)
+        self.assertNotIn('win32com.client.Dispatch("Word.Application")', runner)
+
+    def test_word_timeout_kills_only_registered_own_pid(self):
+        tmp = pathlib.Path(os.getenv("TMP") or os.getenv("TEMP") or ".")
+        pdf_path = tmp / "inspyro-word-timeout-owned.pdf"
+        pid_path = pathlib.Path(pdf_converter._word_pid_sidecar_path(str(pdf_path)))
+        original_word_available = pdf_converter.MS_WORD_AVAILABLE
+
+        def _timeout_after_pid_sidecar(*_args, **_kwargs):
+            pid_path.write_text(
+                '{"pid": 4242, "own_pid": true, "preexisting_pids": [1111]}',
+                encoding="utf-8",
+            )
+            raise pdf_converter.subprocess.TimeoutExpired(cmd=["word"], timeout=3)
+
+        try:
+            pdf_converter.MS_WORD_AVAILABLE = True
+            with mock.patch.object(
+                pdf_converter.subprocess,
+                "run",
+                side_effect=_timeout_after_pid_sidecar,
+            ):
+                with mock.patch.object(
+                    pdf_converter,
+                    "_terminate_process_tree_windows",
+                    return_value={
+                        "word_timeout_cleanup_attempted": True,
+                        "word_timeout_cleanup_succeeded": True,
+                        "word_timeout_cleanup_error": None,
+                    },
+                ) as cleanup_mock:
+                    result = pdf_converter._convert_to_pdf_word_with_timeout(
+                        str(tmp / "input.docx"),
+                        str(pdf_path),
+                        3,
+                    )
+        finally:
+            pdf_converter.MS_WORD_AVAILABLE = original_word_available
+            try:
+                pid_path.unlink()
+            except FileNotFoundError:
+                pass
+
+        self.assertEqual(result.get("error_kind"), "timeout")
+        self.assertEqual(result.get("word_pid"), 4242)
+        self.assertTrue(result.get("word_timeout_cleanup_attempted"))
+        self.assertTrue(result.get("word_timeout_cleanup_succeeded"))
+        cleanup_mock.assert_called_once_with(4242)
+
+    def test_word_timeout_without_verified_pid_does_not_kill_processes(self):
+        tmp = pathlib.Path(os.getenv("TMP") or os.getenv("TEMP") or ".")
+        pdf_path = tmp / "inspyro-word-timeout-unverified.pdf"
+        pid_path = pathlib.Path(pdf_converter._word_pid_sidecar_path(str(pdf_path)))
+        try:
+            pid_path.unlink()
+        except FileNotFoundError:
+            pass
+        original_word_available = pdf_converter.MS_WORD_AVAILABLE
+
+        try:
+            pdf_converter.MS_WORD_AVAILABLE = True
+            with mock.patch.object(
+                pdf_converter.subprocess,
+                "run",
+                side_effect=pdf_converter.subprocess.TimeoutExpired(cmd=["word"], timeout=3),
+            ):
+                with mock.patch.object(pdf_converter, "_terminate_process_tree_windows") as cleanup_mock:
+                    result = pdf_converter._convert_to_pdf_word_with_timeout(
+                        str(tmp / "input.docx"),
+                        str(pdf_path),
+                        3,
+                    )
+        finally:
+            pdf_converter.MS_WORD_AVAILABLE = original_word_available
+
+        self.assertEqual(result.get("error_kind"), "timeout")
+        self.assertFalse(result.get("word_timeout_cleanup_attempted"))
+        self.assertEqual(result.get("word_timeout_cleanup_error"), "word_pid_not_verified_as_own")
+        cleanup_mock.assert_not_called()
+
+    def test_word_preexisting_pid_abort_allows_libreoffice_fallback(self):
+        docx_b64 = self._to_b64(self._make_docx_bytes())
+        original_word_available = pdf_converter.MS_WORD_AVAILABLE
+        original_pdf_available = pdf_converter.PDF_CONVERT_AVAILABLE
+        original_soffice_path = pdf_converter._SOFFICE_PATH
+
+        def _fake_soffice_run(cmd, stdout=None, stderr=None, timeout=None):
+            outdir = pathlib.Path(cmd[cmd.index("--outdir") + 1])
+            (outdir / "in.pdf").write_bytes(b"%PDF-1.4\n%fallback\n%%EOF\n")
+            return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+        try:
+            pdf_converter.MS_WORD_AVAILABLE = True
+            pdf_converter.PDF_CONVERT_AVAILABLE = True
+            pdf_converter._SOFFICE_PATH = "soffice"
+            with mock.patch.object(
+                pdf_converter,
+                "_convert_to_pdf_word_with_timeout",
+                return_value={
+                    "success": False,
+                    "error": "word_instance_reused_existing_pid",
+                    "error_kind": "word_isolation",
+                    "word_isolated": False,
+                    "word_pid": 1111,
+                    "word_existing_pids": [1111],
+                },
+            ):
+                with mock.patch.object(pdf_converter.subprocess, "run", side_effect=_fake_soffice_run):
+                    result = pdf_converter.convert_docx_with_diagnostics(docx_b64, timeout_s=7)
+        finally:
+            pdf_converter.MS_WORD_AVAILABLE = original_word_available
+            pdf_converter.PDF_CONVERT_AVAILABLE = original_pdf_available
+            pdf_converter._SOFFICE_PATH = original_soffice_path
+
+        self.assertEqual(result.get("converter_used"), "libreoffice")
+        self.assertIn("word_instance_reused_existing_pid", result.get("word_error") or "")
+        self.assertEqual(result.get("word_pid"), 1111)
+        self.assertFalse(result.get("word_isolated"))
+
     def test_convert_docx_with_disabled_max_bytes_allows_large_docx(self):
         docx_bytes = self._make_large_docx_bytes()
         docx_b64 = self._to_b64(docx_bytes)

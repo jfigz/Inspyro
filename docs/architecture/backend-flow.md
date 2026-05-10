@@ -1,7 +1,7 @@
 ﻿# Flujo del Backend
 
 > **Archivo principal:** `backend/main.py`
-> **Última actualización:** 2026-02-07
+> **Última actualización:** 2026-05-09
 > **Contrato canónico:** `docs/architecture/contracts-catalog.md`
 
 ---
@@ -18,7 +18,7 @@
 
 - El dispatcher en `backend/main.py` enruta por `message.type`.
 - Mensajes críticos de notebook se ejecutan en ruta directa.
-- Previews de template (`template_preview_style`, `template_table_preview`) se ejecutan en background.
+- Previews legacy de template (`template_preview_style`, `template_table_preview`) se ejecutan en background; el preview principal del Template Editor usa REST (`/api/templates/sample-preview/*`) sobre el DOCX de ejemplo generado por frontend.
 - El endpoint usa `manager.connect()` / `manager.disconnect()` para mantener métricas consistentes de conexiones.
 - JSON inválido, payload no válido y tipos desconocidos retornan `type="error"` con `error_code` + `details` opcional.
 
@@ -32,7 +32,7 @@ Ver lista completa en `docs/architecture/contracts-catalog.md` y `docs/llm-index
 
 1. Lock por `kernel_id` para operaciones notebook/template.
 2. `execute_lock` por sesión kernel para proteger canales ZMQ.
-3. Semáforos específicos para previews de template.
+3. Semáforos específicos para previews legacy de template y cola Word compartida para renders nativos.
 4. Timeouts de lock/preview para evitar bloqueo indefinido.
 
 ---
@@ -42,7 +42,7 @@ Ver lista completa en `docs/architecture/contracts-catalog.md` y `docs/llm-index
 | Servicio | Función |
 |----------|---------|
 | `jupyter_kernel.py` | ciclo de vida y ejecución del kernel |
-| `template_service.py` | plantillas DOCX, extracción y previews |
+| `template_service.py` | plantillas DOCX, extracción, previews legacy y render/apertura del DOCX de ejemplo |
 | `pdf_converter.py` | DOCX→PDF + caché |
 | `dependency_service.py` | análisis de dependencias/impacto |
 | `websocket_manager.py` | envío de mensajes a clientes |

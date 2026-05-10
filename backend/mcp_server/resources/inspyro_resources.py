@@ -118,6 +118,7 @@ def _render_manifest() -> str:
             ],
             "guides": [
                 "inspyro://guides/start-here",
+                "inspyro://guides/client-configuration",
                 "inspyro://guides/notebook-workflow",
                 "inspyro://guides/docx-quickstart",
                 "inspyro://guides/artifact-lifecycle",
@@ -139,6 +140,7 @@ def _render_manifest() -> str:
                 "Use prepare_document_delivery for the final clean deliverable; it never replaces the original artifact.",
                 "`source_path` in document-quality tools means the notebook/script origin that has Inspyro DOCX history; do not pass an exported `.docx` path there.",
                 "Use set_component_profile only when you need to expand from the default authoring surface into analysis, files, or admin tools.",
+                "Use `inspyro://guides/client-configuration` when configuring Codex, Claude, Cursor, VS Code, or a generic MCP HTTP client.",
                 "Use `inspyro://session/notebooks` or `list_session_notebooks` to inspect the notebooks currently alive in this MCP session.",
                 "Notebook create/load/execute flows require `stateful-http` or `stdio`; they are intentionally rejected in `stateless-http`.",
                 "Notebook execution tools accept timeout controls; raise them deliberately for long COM, SAP2000, Word, or PDF-conversion steps instead of assuming the default 600s is enough.",
@@ -268,6 +270,101 @@ async def _read_artifact_token_resource(kind: str, token: str) -> bytes | str:
     return content
 
 
+CLIENT_CONFIGURATION_GUIDE = _render_guide(
+    title="Client Configuration",
+    purpose=(
+        "Explica como conectar Inspyro como servidor MCP local universal desde clientes con capacidades agenticas "
+        "como Codex, Claude Code/Desktop, Cursor, VS Code o integraciones HTTP propias."
+    ),
+    when_to_read=(
+        "Leelo cuando estes configurando un cliente MCP nuevo o revisando por que un cliente no conserva sesiones "
+        "de notebook, kernels o artefactos entre llamadas."
+    ),
+    sequence=dedent(
+        """
+        Transporte recomendado:
+        1. Usa Streamable HTTP `stateful-http` para clientes que soporten URL MCP: `http://127.0.0.1:8100/mcp`.
+        2. Usa `stdio` cuando el cliente de escritorio/CLI lanza el proceso por ti.
+        3. Mantén el backend Inspyro activo antes de conectar el MCP; el bridge usa `INSPYRO_BACKEND_URL`, `INSPYRO_BACKEND_WS_URL` e `INSPYRO_BACKEND_NOTEBOOK_WS_URL`.
+        4. Mantén el perfil por defecto `authoring` para notebooks, DOCX/PDF, plantillas y unidades.
+
+        Presets de cliente:
+
+        Codex HTTP:
+        ```toml
+        [mcp_servers.inspyro]
+        url = "http://127.0.0.1:8100/mcp"
+        ```
+
+        Claude Code HTTP:
+        ```bash
+        claude mcp add-json inspyro '{"type":"http","url":"http://127.0.0.1:8100/mcp"}'
+        ```
+
+        Claude Desktop stdio:
+        ```json
+        {
+          "mcpServers": {
+            "inspyro": {
+              "command": "python",
+              "args": ["-m", "mcp_server", "--stdio"],
+              "cwd": "C:\\\\Inspyro\\\\Workspace\\\\backend",
+              "env": {
+                "INSPYRO_BACKEND_URL": "http://127.0.0.1:8000",
+                "INSPYRO_BACKEND_WS_URL": "ws://127.0.0.1:8000/ws",
+                "INSPYRO_BACKEND_NOTEBOOK_WS_URL": "ws://127.0.0.1:8000/ws/notebook"
+              }
+            }
+          }
+        }
+        ```
+
+        VS Code MCP:
+        ```json
+        {
+          "servers": {
+            "inspyro": {
+              "type": "http",
+              "url": "http://127.0.0.1:8100/mcp"
+            }
+          }
+        }
+        ```
+
+        Cursor MCP:
+        ```json
+        {
+          "mcpServers": {
+            "inspyro": {
+              "url": "http://127.0.0.1:8100/mcp"
+            }
+          }
+        }
+        ```
+
+        Cliente HTTP generico:
+        - Endpoint: `http://127.0.0.1:8100/mcp`
+        - Transporte: Streamable HTTP
+        - Modo: stateful HTTP
+        - Perfil inicial: `authoring`
+        - Reutiliza el `Mcp-Session-Id` que devuelve el servidor cuando el cliente maneje sesiones manualmente.
+        """
+    ).strip(),
+    common_errors=dedent(
+        """
+        - `stateless-http` no sirve para notebooks: cada request pierde la sesion y por eso no puede conservar kernels ni artefactos.
+        - Si el backend empaquetado usa puerto dinamico, no fuerces `8000`: usa los valores expuestos por `/api/mcp/status.configuration` o hereda las variables `INSPYRO_BACKEND_*`.
+        - El boton de la UI solo inicia/detiene el servicio HTTP local. Un cliente `stdio` crea su propio proceso MCP con su propio ciclo de vida.
+        - Mantener `INSPYRO_MCP_HOST=127.0.0.1` es el modo seguro por defecto; publicar el MCP en red requiere autenticacion y controles fuera del alcance local.
+        """
+    ).strip(),
+    next_step=(
+        "Cuando el cliente ya conecte, lee `inspyro://manifest` y luego `inspyro://guides/start-here` "
+        "antes de ejecutar tools que muten notebooks, documentos o archivos."
+    ),
+)
+
+
 START_HERE_GUIDE = _render_guide(
     title="Inspyro MCP - Start Here",
     purpose=(
@@ -282,14 +379,15 @@ START_HERE_GUIDE = _render_guide(
         """
         1. Lee `inspyro://manifest`.
         2. Lee `inspyro://guides/start-here`.
-        3. Consulta `inspyro://system/info` para confirmar workspace y entorno.
-        4. Trabaja por defecto en el perfil `authoring`; solo usa `set_component_profile` si necesitas `analysis`, `files` o `admin`.
-        5. Si vas a trabajar con notebooks, lee `inspyro://guides/notebook-workflow`.
-        6. Si vas a generar documentos, lee `inspyro://guides/docx-quickstart` y `inspyro://guides/artifact-lifecycle`.
-        7. Si vas a tocar plantillas, lee `inspyro://guides/template-workflow`.
-        8. Si vas a usar analisis o unidades, lee `inspyro://guides/analysis-units-workflow`.
-        9. Si recibes un error o una sesion queda inconsistente, lee `inspyro://guides/error-recovery`.
-        10. Si una celda o batch va a reiniciar SAP2000, usar COM, tocar Word/LibreOffice o disparar conversion pesada, sube `timeout` o `timeout_per_cell` por encima del default de `600`; `900` suele ser un rango razonable.
+        3. Si aun estas configurando el cliente MCP, lee `inspyro://guides/client-configuration`.
+        4. Consulta `inspyro://system/info` para confirmar workspace y entorno.
+        5. Trabaja por defecto en el perfil `authoring`; solo usa `set_component_profile` si necesitas `analysis`, `files` o `admin`.
+        6. Si vas a trabajar con notebooks, lee `inspyro://guides/notebook-workflow`.
+        7. Si vas a generar documentos, lee `inspyro://guides/docx-quickstart` y `inspyro://guides/artifact-lifecycle`.
+        8. Si vas a tocar plantillas, lee `inspyro://guides/template-workflow`.
+        9. Si vas a usar analisis o unidades, lee `inspyro://guides/analysis-units-workflow`.
+        10. Si recibes un error o una sesion queda inconsistente, lee `inspyro://guides/error-recovery`.
+        11. Si una celda o batch va a reiniciar SAP2000, usar COM, tocar Word/LibreOffice o disparar conversion pesada, sube `timeout` o `timeout_per_cell` por encima del default de `600`; `900` suele ser un rango razonable.
 
         Arbol de decision rapido:
         - Explorar workspace en modo seguro: `inspyro://workspace/tree/{path*}` e `inspyro://workspace/file/{path*}`
@@ -759,6 +857,16 @@ async def session_notebooks() -> str:
 )
 async def guide_start_here() -> str:
     return START_HERE_GUIDE
+
+
+@mcp.resource(
+    "inspyro://guides/client-configuration",
+    title="Client Configuration Guide",
+    description="Presets y parametros para conectar clientes MCP agenticos a Inspyro.",
+    mime_type="text/markdown",
+)
+async def guide_client_configuration() -> str:
+    return CLIENT_CONFIGURATION_GUIDE
 
 
 @mcp.resource(

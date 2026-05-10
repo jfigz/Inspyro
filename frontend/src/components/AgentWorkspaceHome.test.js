@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import AgentWorkspaceHome from './AgentWorkspaceHome';
 
 const notebookTarget = {
-  path: 'C:\\CalcPyro\\P1\\examples\\structural-report-demo\\beam_report.ipynb',
+  path: 'C:\\Inspyro\\Workspace\\examples\\structural-report-demo\\beam_report.ipynb',
   name: 'beam_report.ipynb',
 };
 
@@ -124,7 +124,7 @@ const buildCards = () => ({
 
 const buildWorkspaceData = (overrides = {}) => ({
   workspaceName: 'Structural Demo',
-  workspacePath: 'C:\\CalcPyro\\P1\\examples\\structural-report-demo',
+    workspacePath: 'C:\\Inspyro\\Workspace\\examples\\structural-report-demo',
   subtitle: 'Centro operativo del workspace.',
   meta: ['2 notebooks', '1 DOCX listo', 'Espejo activo'],
   headerActions: [
@@ -195,10 +195,10 @@ const buildWorkspaceData = (overrides = {}) => ({
 
 const buildLegacyProps = (overrides = {}) => ({
   workspaceName: 'Structural Demo',
-  workspacePath: 'C:\\CalcPyro\\P1\\examples\\structural-report-demo',
+    workspacePath: 'C:\\Inspyro\\Workspace\\examples\\structural-report-demo',
   openFiles: [
     notebookTarget,
-    { path: 'C:\\CalcPyro\\P1\\examples\\structural-report-demo\\beam_design.py', name: 'beam_design.py' },
+    { path: 'C:\\Inspyro\\Workspace\\examples\\structural-report-demo\\beam_design.py', name: 'beam_design.py' },
   ],
   activeFile: notebookTarget,
   templateInfo: templateTarget,

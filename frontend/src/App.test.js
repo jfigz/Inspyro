@@ -145,17 +145,17 @@ describe('applyMcpArtifactToDocumentState', () => {
 
   it('normalizes workspace payload without forcing an active workspace from defaults', () => {
     const next = getWorkspaceSessionFromPayload({
-      workspace_root: 'C:\\Users\\Usuario\\Documents\\Inspyro\\Projects',
-      workspace_path: 'C:\\Users\\Usuario\\Documents\\Inspyro\\Projects',
-      suggested_workspace_root: 'C:\\Users\\Usuario\\Documents\\Inspyro\\Projects',
+      workspace_root: 'C:\\Inspyro\\Workspace\\Projects',
+      workspace_path: 'C:\\Inspyro\\Workspace\\Projects',
+      suggested_workspace_root: 'C:\\Inspyro\\Workspace\\Projects',
       workspace_source: 'default',
-      recent_workspaces: ['C:\\Users\\Usuario\\Documents\\Inspyro\\Projects\\Cliente-A'],
+      recent_workspaces: ['C:\\Inspyro\\Workspace\\Projects\\Cliente-A'],
     });
 
     expect(next.activeWorkspace).toBeNull();
-    expect(next.workspaceRoot).toBe('C:\\Users\\Usuario\\Documents\\Inspyro\\Projects');
-    expect(next.suggestedWorkspaceRoot).toBe('C:\\Users\\Usuario\\Documents\\Inspyro\\Projects');
-    expect(next.recentWorkspaces).toEqual(['C:\\Users\\Usuario\\Documents\\Inspyro\\Projects\\Cliente-A']);
+    expect(next.workspaceRoot).toBe('C:\\Inspyro\\Workspace\\Projects');
+    expect(next.suggestedWorkspaceRoot).toBe('C:\\Inspyro\\Workspace\\Projects');
+    expect(next.recentWorkspaces).toEqual(['C:\\Inspyro\\Workspace\\Projects\\Cliente-A']);
   });
 
   it('shows the project launcher only when no workspace is active and there are no open files', () => {

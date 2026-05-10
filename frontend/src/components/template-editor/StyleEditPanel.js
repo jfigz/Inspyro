@@ -71,6 +71,16 @@ const LINE_SPACING_RULES = [
     { value: 'MULTIPLE', label: 'Múltiple' },
 ];
 
+const WORD_COMPLETE_TABS = [
+    { key: 'quick', label: 'Rapido' },
+    { key: 'font', label: 'Fuente' },
+    { key: 'paragraph', label: 'Parrafo' },
+    { key: 'list', label: 'Listas' },
+    { key: 'table', label: 'Tabla' },
+    { key: 'identity', label: 'Identidad' },
+    { key: 'raw', label: 'Raw OOXML' },
+];
+
 const toNumberOrNull = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const parsed = Number(value);
@@ -518,6 +528,7 @@ const StyleEditPanel = ({
     });
     const [hasAdvancedChanges, setHasAdvancedChanges] = useState(false);
     const [wordCompleteEditMode, setWordCompleteEditMode] = useState(false);
+    const [wordCompleteTab, setWordCompleteTab] = useState('quick');
     const [wordStyleJson, setWordStyleJson] = useState({
         metadata: '',
         visibility: '',
@@ -882,6 +893,7 @@ const StyleEditPanel = ({
         setWordStyleOriginal(nextState);
         setHasWordStyleChanges(false);
         setWordCompleteEditMode(false);
+        setWordCompleteTab('quick');
     }, [buildWordStyleJsonState, isGlobalSelection, wordStyleDetails]);
 
     const handleAdvancedChange = (key, value) => {
@@ -927,6 +939,44 @@ const StyleEditPanel = ({
             return nextState;
         });
     };
+
+    const readWordStyleJsonObject = useCallback((sectionKey) => {
+        const rawValue = wordStyleJson[sectionKey];
+        if (!rawValue || !String(rawValue).trim()) return {};
+        try {
+            const parsed = JSON.parse(rawValue);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (error) {
+            return {};
+        }
+    }, [wordStyleJson]);
+
+    const updateWordStyleObject = useCallback((sectionKey, updater) => {
+        const current = readWordStyleJsonObject(sectionKey);
+        const nextObject = typeof updater === 'function' ? updater(current) : updater;
+        const cleaned = nextObject && typeof nextObject === 'object' && !Array.isArray(nextObject)
+            ? nextObject
+            : {};
+        handleWordStyleJsonChange(
+            sectionKey,
+            Object.keys(cleaned).length ? formatJson(cleaned) : ''
+        );
+    }, [readWordStyleJsonObject]);
+
+    const updateWordStyleField = useCallback((sectionKey, fieldKey, value) => {
+        updateWordStyleObject(sectionKey, current => ({
+            ...current,
+            [fieldKey]: value,
+        }));
+    }, [updateWordStyleObject]);
+
+    const removeWordStyleField = useCallback((sectionKey, fieldKey) => {
+        updateWordStyleObject(sectionKey, current => {
+            const next = { ...current };
+            delete next[fieldKey];
+            return next;
+        });
+    }, [updateWordStyleObject]);
 
     const toggleWordCompleteEditMode = () => {
         if (wordCompleteEditMode) {
@@ -1391,6 +1441,555 @@ const StyleEditPanel = ({
     const previewStatusLabel = isPreviewLoading
         ? (previewImage ? 'Actualizando preview Word nativo...' : 'Renderizando preview Word nativo...')
         : (previewImage ? 'Preview Word nativo listo' : 'Preview interno automatico');
+
+    const wordMetadataDraft = readWordStyleJsonObject('metadata');
+    const wordVisibilityDraft = readWordStyleJsonObject('visibility');
+    const wordFontDraft = readWordStyleJsonObject('font');
+    const wordParagraphDraft = readWordStyleJsonObject('paragraph');
+    const wordListDraft = readWordStyleJsonObject('list');
+    const wordTableDraft = readWordStyleJsonObject('table');
+    const wordFirstTab = Array.isArray(wordParagraphDraft.tabs) ? (wordParagraphDraft.tabs[0] || {}) : {};
+    const wordParagraphBorders = wordParagraphDraft.borders && typeof wordParagraphDraft.borders === 'object'
+        ? wordParagraphDraft.borders
+        : {};
+    const wordBottomBorder = wordParagraphBorders.bottom || {};
+    const wordParagraphShading = wordParagraphDraft.shading && typeof wordParagraphDraft.shading === 'object'
+        ? wordParagraphDraft.shading
+        : {};
+
+    const renderWordBadge = (sectionKey, fieldKey, explicitOverride = null) => {
+        const sections = {
+            metadata: wordMetadataDraft,
+            visibility: wordVisibilityDraft,
+            font: wordFontDraft,
+            paragraph: wordParagraphDraft,
+            list: wordListDraft,
+            table: wordTableDraft,
+        };
+        const section = sections[sectionKey] || {};
+        const explicit = explicitOverride ?? Object.prototype.hasOwnProperty.call(section, fieldKey);
+        const isTheme = String(fieldKey || '').toLowerCase().includes('theme');
+        const label = explicit ? (isTheme ? 'Theme' : 'Explicito') : 'Heredado';
+        return (
+            <span className={`field-origin ${explicit ? 'explicit' : 'effective'}`} title={label}>
+                {label}
+            </span>
+        );
+    };
+
+    const updateWordFirstTab = (fieldKey, value) => {
+        updateWordStyleObject('paragraph', current => {
+            const tabs = Array.isArray(current.tabs) ? [...current.tabs] : [{}];
+            tabs[0] = { ...(tabs[0] || {}), [fieldKey]: value };
+            return { ...current, tabs };
+        });
+    };
+
+    const updateWordParagraphBorder = (side, fieldKey, value) => {
+        updateWordStyleObject('paragraph', current => {
+            const borders = current.borders && typeof current.borders === 'object' ? current.borders : {};
+            const sideValue = borders[side] && typeof borders[side] === 'object' ? borders[side] : {};
+            return {
+                ...current,
+                borders: {
+                    ...borders,
+                    [side]: { ...sideValue, [fieldKey]: value },
+                },
+            };
+        });
+    };
+
+    const updateWordParagraphShading = (fieldKey, value) => {
+        updateWordStyleObject('paragraph', current => {
+            const shading = current.shading && typeof current.shading === 'object' ? current.shading : {};
+            return { ...current, shading: { ...shading, [fieldKey]: value } };
+        });
+    };
+
+    const renderWordRawJsonEditors = () => (
+        <div className="word-raw-grid">
+            {[
+                ['metadata', 'Identidad', 'template-word-style-metadata'],
+                ['visibility', 'Galeria', 'template-word-style-visibility'],
+                ['font', 'Fuente avanzada', 'template-word-style-font'],
+                ['paragraph', 'Parrafo avanzado', 'template-word-style-paragraph'],
+                ['list', 'Listas', 'template-word-style-list'],
+                ['table', 'Tablas', 'template-word-style-table'],
+            ].map(([sectionKey, label, testId]) => (
+                <div className="advanced-subblock" key={sectionKey}>
+                    <div className="advanced-subtitle">{label}</div>
+                    <textarea
+                        className="advanced-textarea"
+                        value={wordStyleJson[sectionKey]}
+                        onChange={e => handleWordStyleJsonChange(sectionKey, e.target.value)}
+                        data-testid={testId}
+                        placeholder="{}"
+                    />
+                </div>
+            ))}
+        </div>
+    );
+
+    const renderWordStructuredPanel = () => {
+        if (!wordCompleteEditMode) {
+            return (
+                <div className="word-complete-readonly-grid">
+                    {[
+                        ['Identidad', wordStyleJson.metadata],
+                        ['Galeria', wordStyleJson.visibility],
+                        ['Fuente', wordStyleJson.font],
+                        ['Parrafo', wordStyleJson.paragraph],
+                        ['Listas', wordStyleJson.list],
+                        ['Tabla', wordStyleJson.table],
+                    ].map(([label, jsonValue]) => (
+                        <div className="advanced-subblock" key={label}>
+                            <div className="advanced-subtitle">{label}</div>
+                            {jsonValue ? <pre>{jsonValue}</pre> : <div className="advanced-empty">Sin datos.</div>}
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        return (
+            <>
+                <div className="word-complete-tabs" role="tablist" aria-label="Word completo">
+                    {WORD_COMPLETE_TABS.map(tab => (
+                        <button
+                            key={tab.key}
+                            type="button"
+                            className={`word-complete-tab ${wordCompleteTab === tab.key ? 'active' : ''}`}
+                            onClick={() => setWordCompleteTab(tab.key)}
+                            data-testid={`template-word-tab-${tab.key}`}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+
+                {wordCompleteTab === 'quick' && (
+                    <div className="word-complete-tab-panel">
+                        <div className="advanced-note">
+                            Usa Fuente, Parrafo, Listas, Tabla e Identidad para editar propiedades OOXML estructuradas.
+                        </div>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'font' && (
+                    <div className="word-complete-tab-panel word-control-grid">
+                        <div className="edit-row">
+                            <label>CS {renderWordBadge('font', 'complex_script_font_name')}</label>
+                            <input
+                                type="text"
+                                value={wordFontDraft.complex_script_font_name || ''}
+                                onChange={e => updateWordStyleField('font', 'complex_script_font_name', e.target.value)}
+                                data-testid="template-word-font-complex-script"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>East Asia {renderWordBadge('font', 'east_asia_font_name')}</label>
+                            <input
+                                type="text"
+                                value={wordFontDraft.east_asia_font_name || ''}
+                                onChange={e => updateWordStyleField('font', 'east_asia_font_name', e.target.value)}
+                                data-testid="template-word-font-east-asia"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>Tamano CS {renderWordBadge('font', 'complex_script_size_pt')}</label>
+                            <input
+                                type="number"
+                                value={wordFontDraft.complex_script_size_pt ?? ''}
+                                onChange={e => updateWordStyleField('font', 'complex_script_size_pt', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-font-cs-size"
+                            />
+                            <span className="unit">pt</span>
+                        </div>
+                        <div className="edit-row">
+                            <label>Espaciado {renderWordBadge('font', 'character_spacing_twips')}</label>
+                            <input
+                                type="number"
+                                value={wordFontDraft.character_spacing_twips ?? ''}
+                                onChange={e => updateWordStyleField('font', 'character_spacing_twips', e.target.value)}
+                                data-testid="template-word-font-spacing"
+                            />
+                            <span className="unit">twips</span>
+                        </div>
+                        <div className="edit-row">
+                            <label>Kerning {renderWordBadge('font', 'kerning_pt')}</label>
+                            <input
+                                type="number"
+                                value={wordFontDraft.kerning_pt ?? ''}
+                                onChange={e => updateWordStyleField('font', 'kerning_pt', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-font-kerning"
+                            />
+                            <span className="unit">pt</span>
+                        </div>
+                        <div className="edit-row">
+                            <label>Posicion {renderWordBadge('font', 'position_pt')}</label>
+                            <input
+                                type="number"
+                                value={wordFontDraft.position_pt ?? ''}
+                                onChange={e => updateWordStyleField('font', 'position_pt', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-font-position"
+                            />
+                            <span className="unit">pt</span>
+                        </div>
+                        <div className="edit-row">
+                            <label>Idioma {renderWordBadge('font', 'language')}</label>
+                            <input
+                                type="text"
+                                value={wordFontDraft.language || ''}
+                                onChange={e => updateWordStyleField('font', 'language', e.target.value)}
+                                data-testid="template-word-font-language"
+                            />
+                        </div>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordFontDraft.vanish}
+                                onChange={e => updateWordStyleField('font', 'vanish', e.target.checked)}
+                                data-testid="template-word-font-vanish"
+                            />
+                            Oculto {renderWordBadge('font', 'vanish')}
+                        </label>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordFontDraft.rtl}
+                                onChange={e => updateWordStyleField('font', 'rtl', e.target.checked)}
+                                data-testid="template-word-font-rtl"
+                            />
+                            RTL {renderWordBadge('font', 'rtl')}
+                        </label>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'paragraph' && (
+                    <div className="word-complete-tab-panel word-control-grid">
+                        <div className="edit-row">
+                            <label>Alineacion texto {renderWordBadge('paragraph', 'text_alignment')}</label>
+                            <select
+                                value={wordParagraphDraft.text_alignment || ''}
+                                onChange={e => updateWordStyleField('paragraph', 'text_alignment', e.target.value)}
+                                data-testid="template-word-paragraph-text-alignment"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="auto">Auto</option>
+                                <option value="top">Top</option>
+                                <option value="center">Center</option>
+                                <option value="baseline">Baseline</option>
+                                <option value="bottom">Bottom</option>
+                            </select>
+                        </div>
+                        <div className="edit-row">
+                            <label>Direccion {renderWordBadge('paragraph', 'text_direction')}</label>
+                            <select
+                                value={wordParagraphDraft.text_direction || ''}
+                                onChange={e => updateWordStyleField('paragraph', 'text_direction', e.target.value)}
+                                data-testid="template-word-paragraph-text-direction"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="lrTb">lrTb</option>
+                                <option value="tbRl">tbRl</option>
+                                <option value="btLr">btLr</option>
+                                <option value="lrTbV">lrTbV</option>
+                            </select>
+                        </div>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordParagraphDraft.contextual_spacing}
+                                onChange={e => updateWordStyleField('paragraph', 'contextual_spacing', e.target.checked)}
+                                data-testid="template-word-paragraph-contextual-spacing"
+                            />
+                            Espaciado contextual {renderWordBadge('paragraph', 'contextual_spacing')}
+                        </label>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordParagraphDraft.bidi}
+                                onChange={e => updateWordStyleField('paragraph', 'bidi', e.target.checked)}
+                                data-testid="template-word-paragraph-bidi"
+                            />
+                            Bidi {renderWordBadge('paragraph', 'bidi')}
+                        </label>
+                        <div className="word-mini-section">
+                            <div className="advanced-subtitle">Tab 1 {renderWordBadge('paragraph', 'tabs', Array.isArray(wordParagraphDraft.tabs))}</div>
+                            <div className="edit-row">
+                                <label>Posicion</label>
+                                <input
+                                    type="number"
+                                    value={wordFirstTab.pos_twips ?? ''}
+                                    onChange={e => updateWordFirstTab('pos_twips', e.target.value)}
+                                    data-testid="template-word-paragraph-tab-pos"
+                                />
+                                <span className="unit">twips</span>
+                            </div>
+                            <div className="edit-row">
+                                <label>Tipo</label>
+                                <select
+                                    value={wordFirstTab.val || ''}
+                                    onChange={e => updateWordFirstTab('val', e.target.value)}
+                                    data-testid="template-word-paragraph-tab-val"
+                                >
+                                    <option value="">left</option>
+                                    <option value="left">left</option>
+                                    <option value="center">center</option>
+                                    <option value="right">right</option>
+                                    <option value="decimal">decimal</option>
+                                    <option value="bar">bar</option>
+                                </select>
+                            </div>
+                            <div className="edit-row">
+                                <label>Leader</label>
+                                <select
+                                    value={wordFirstTab.leader || ''}
+                                    onChange={e => updateWordFirstTab('leader', e.target.value)}
+                                    data-testid="template-word-paragraph-tab-leader"
+                                >
+                                    <option value="">none</option>
+                                    <option value="dot">dot</option>
+                                    <option value="hyphen">hyphen</option>
+                                    <option value="underscore">underscore</option>
+                                    <option value="middleDot">middleDot</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div className="word-mini-section">
+                            <div className="advanced-subtitle">Sombreado {renderWordBadge('paragraph', 'shading', !!wordParagraphDraft.shading)}</div>
+                            <div className="edit-row">
+                                <label>Fill</label>
+                                <input
+                                    type="text"
+                                    value={wordParagraphShading.fill || ''}
+                                    onChange={e => updateWordParagraphShading('fill', normalizeColor(e.target.value) || e.target.value)}
+                                    data-testid="template-word-paragraph-shading-fill"
+                                    placeholder="F2F2F2"
+                                />
+                            </div>
+                        </div>
+                        <div className="word-mini-section">
+                            <div className="advanced-subtitle">Borde inferior {renderWordBadge('paragraph', 'borders', !!wordParagraphDraft.borders)}</div>
+                            <div className="edit-row">
+                                <label>Estilo</label>
+                                <select
+                                    value={wordBottomBorder.style || ''}
+                                    onChange={e => updateWordParagraphBorder('bottom', 'style', e.target.value)}
+                                    data-testid="template-word-paragraph-border-bottom-style"
+                                >
+                                    <option value="">single</option>
+                                    <option value="single">single</option>
+                                    <option value="double">double</option>
+                                    <option value="dashed">dashed</option>
+                                    <option value="dotted">dotted</option>
+                                    <option value="nil">none</option>
+                                </select>
+                            </div>
+                            <div className="edit-row">
+                                <label>Tamano</label>
+                                <input
+                                    type="number"
+                                    value={wordBottomBorder.size_pt ?? ''}
+                                    onChange={e => updateWordParagraphBorder('bottom', 'size_pt', toNumberOrNull(e.target.value))}
+                                    data-testid="template-word-paragraph-border-bottom-size"
+                                />
+                                <span className="unit">pt</span>
+                            </div>
+                            <div className="edit-row">
+                                <label>Color</label>
+                                <input
+                                    type="text"
+                                    value={wordBottomBorder.color || ''}
+                                    onChange={e => updateWordParagraphBorder('bottom', 'color', normalizeColor(e.target.value) || e.target.value)}
+                                    data-testid="template-word-paragraph-border-bottom-color"
+                                    placeholder="1B4965"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'list' && (
+                    <div className="word-complete-tab-panel word-control-grid">
+                        <div className="edit-row">
+                            <label>Formato {renderWordBadge('list', 'list_format')}</label>
+                            <select
+                                value={wordListDraft.list_format || wordListDraft.format || ''}
+                                onChange={e => updateWordStyleField('list', 'list_format', e.target.value)}
+                                data-testid="template-word-list-format"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="decimal">decimal</option>
+                                <option value="bullet">bullet</option>
+                                <option value="upperLetter">upperLetter</option>
+                                <option value="lowerLetter">lowerLetter</option>
+                                <option value="upperRoman">upperRoman</option>
+                                <option value="lowerRoman">lowerRoman</option>
+                            </select>
+                        </div>
+                        <div className="edit-row">
+                            <label>Inicio {renderWordBadge('list', 'list_start')}</label>
+                            <input
+                                type="number"
+                                value={wordListDraft.list_start ?? wordListDraft.start ?? ''}
+                                onChange={e => updateWordStyleField('list', 'list_start', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-list-start"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>Nivel {renderWordBadge('list', 'list_level')}</label>
+                            <input
+                                type="number"
+                                value={wordListDraft.list_level ?? wordListDraft.level ?? ''}
+                                onChange={e => updateWordStyleField('list', 'list_level', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-list-level"
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'table' && (
+                    <div className="word-complete-tab-panel word-control-grid">
+                        <div className="edit-row">
+                            <label>Alineacion {renderWordBadge('table', 'alignment')}</label>
+                            <select
+                                value={wordTableDraft.alignment || ''}
+                                onChange={e => updateWordStyleField('table', 'alignment', e.target.value)}
+                                data-testid="template-word-table-alignment"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="left">left</option>
+                                <option value="center">center</option>
+                                <option value="right">right</option>
+                            </select>
+                        </div>
+                        <div className="edit-row">
+                            <label>Layout {renderWordBadge('table', 'layout_type')}</label>
+                            <select
+                                value={wordTableDraft.layout_type || ''}
+                                onChange={e => updateWordStyleField('table', 'layout_type', e.target.value)}
+                                data-testid="template-word-table-layout"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="autofit">autofit</option>
+                                <option value="fixed">fixed</option>
+                            </select>
+                        </div>
+                        <div className="edit-row">
+                            <label>Sombreado {renderWordBadge('table', 'shading_color')}</label>
+                            <input
+                                type="text"
+                                value={wordTableDraft.shading_color || ''}
+                                onChange={e => updateWordStyleField('table', 'shading_color', normalizeColor(e.target.value) || e.target.value)}
+                                data-testid="template-word-table-shading"
+                                placeholder="D9EAF7"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>VAlign celda {renderWordBadge('table', 'cell_vertical_align')}</label>
+                            <select
+                                value={wordTableDraft.cell_vertical_align || ''}
+                                onChange={e => updateWordStyleField('table', 'cell_vertical_align', e.target.value)}
+                                data-testid="template-word-table-cell-valign"
+                            >
+                                <option value="">Heredado</option>
+                                <option value="top">top</option>
+                                <option value="center">center</option>
+                                <option value="bottom">bottom</option>
+                            </select>
+                        </div>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'identity' && (
+                    <div className="word-complete-tab-panel word-control-grid">
+                        <div className="edit-row">
+                            <label>Prioridad {renderWordBadge('metadata', 'ui_priority')}</label>
+                            <input
+                                type="number"
+                                value={wordMetadataDraft.ui_priority ?? ''}
+                                onChange={e => updateWordStyleField('metadata', 'ui_priority', toNumberOrNull(e.target.value))}
+                                data-testid="template-word-style-ui-priority"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>Basado en {renderWordBadge('metadata', 'based_on')}</label>
+                            <input
+                                type="text"
+                                value={wordMetadataDraft.based_on || ''}
+                                onChange={e => updateWordStyleField('metadata', 'based_on', e.target.value)}
+                                data-testid="template-word-style-based-on"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>Siguiente {renderWordBadge('metadata', 'next')}</label>
+                            <input
+                                type="text"
+                                value={wordMetadataDraft.next || ''}
+                                onChange={e => updateWordStyleField('metadata', 'next', e.target.value)}
+                                data-testid="template-word-style-next"
+                            />
+                        </div>
+                        <div className="edit-row">
+                            <label>Aliases {renderWordBadge('metadata', 'aliases')}</label>
+                            <input
+                                type="text"
+                                value={Array.isArray(wordMetadataDraft.aliases) ? wordMetadataDraft.aliases.join(', ') : (wordMetadataDraft.aliases || '')}
+                                onChange={e => updateWordStyleField('metadata', 'aliases', e.target.value.split(',').map(item => item.trim()).filter(Boolean))}
+                                data-testid="template-word-style-aliases"
+                            />
+                        </div>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordVisibilityDraft.q_format}
+                                onChange={e => updateWordStyleField('visibility', 'q_format', e.target.checked)}
+                                data-testid="template-word-style-q-format"
+                            />
+                            Galeria rapida {renderWordBadge('visibility', 'q_format')}
+                        </label>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordVisibilityDraft.semi_hidden}
+                                onChange={e => updateWordStyleField('visibility', 'semi_hidden', e.target.checked)}
+                                data-testid="template-word-style-semi-hidden"
+                            />
+                            Semi oculto {renderWordBadge('visibility', 'semi_hidden')}
+                        </label>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordVisibilityDraft.unhide_when_used}
+                                onChange={e => updateWordStyleField('visibility', 'unhide_when_used', e.target.checked)}
+                                data-testid="template-word-style-unhide-when-used"
+                            />
+                            Mostrar al usar {renderWordBadge('visibility', 'unhide_when_used')}
+                        </label>
+                        <label className="checkbox-row">
+                            <input
+                                type="checkbox"
+                                checked={!!wordMetadataDraft.locked}
+                                onChange={e => updateWordStyleField('metadata', 'locked', e.target.checked)}
+                                data-testid="template-word-style-locked"
+                            />
+                            Bloqueado {renderWordBadge('metadata', 'locked')}
+                        </label>
+                    </div>
+                )}
+
+                {wordCompleteTab === 'raw' && (
+                    <div className="word-complete-tab-panel">
+                        <div className="advanced-edit-hint">
+                            Escape hatch JSON. Reemplaza solo las secciones enviadas y valida forma antes de escribir.
+                        </div>
+                        {renderWordRawJsonEditors()}
+                    </div>
+                )}
+            </>
+        );
+    };
 
     if (!styleInfo) {
         return (
@@ -2164,93 +2763,10 @@ const StyleEditPanel = ({
                     </div>
                     {wordCompleteEditMode && (
                         <div className="advanced-edit-hint">
-                            Cada sección acepta un objeto JSON.
+                            Controles estructurados por familia Word/OOXML; raw queda disponible como escape hatch.
                         </div>
                     )}
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Identidad</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.metadata}
-                                onChange={e => handleWordStyleJsonChange('metadata', e.target.value)}
-                                data-testid="template-word-style-metadata"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.metadata ? <pre>{wordStyleJson.metadata}</pre> : <div className="advanced-empty">Sin metadata Word.</div>
-                        )}
-                    </div>
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Galería</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.visibility}
-                                onChange={e => handleWordStyleJsonChange('visibility', e.target.value)}
-                                data-testid="template-word-style-visibility"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.visibility ? <pre>{wordStyleJson.visibility}</pre> : <div className="advanced-empty">Sin flags de galería.</div>
-                        )}
-                    </div>
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Fuente avanzada</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.font}
-                                onChange={e => handleWordStyleJsonChange('font', e.target.value)}
-                                data-testid="template-word-style-font"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.font ? <pre>{wordStyleJson.font}</pre> : <div className="advanced-empty">Sin fuente avanzada.</div>
-                        )}
-                    </div>
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Párrafo avanzado</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.paragraph}
-                                onChange={e => handleWordStyleJsonChange('paragraph', e.target.value)}
-                                data-testid="template-word-style-paragraph"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.paragraph ? <pre>{wordStyleJson.paragraph}</pre> : <div className="advanced-empty">Sin párrafo avanzado.</div>
-                        )}
-                    </div>
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Listas</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.list}
-                                onChange={e => handleWordStyleJsonChange('list', e.target.value)}
-                                data-testid="template-word-style-list"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.list ? <pre>{wordStyleJson.list}</pre> : <div className="advanced-empty">Sin lista asociada.</div>
-                        )}
-                    </div>
-                    <div className="advanced-subblock">
-                        <div className="advanced-subtitle">Tablas</div>
-                        {wordCompleteEditMode ? (
-                            <textarea
-                                className="advanced-textarea"
-                                value={wordStyleJson.table}
-                                onChange={e => handleWordStyleJsonChange('table', e.target.value)}
-                                data-testid="template-word-style-table"
-                                placeholder="{}"
-                            />
-                        ) : (
-                            wordStyleJson.table ? <pre>{wordStyleJson.table}</pre> : <div className="advanced-empty">Sin tabla avanzada.</div>
-                        )}
-                    </div>
+                    {renderWordStructuredPanel()}
                 </details>
             )}
 

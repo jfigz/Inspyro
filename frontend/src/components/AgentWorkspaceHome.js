@@ -745,7 +745,6 @@ const buildLegacyWorkspaceData = (props) => {
   const latestQualityLabel = latestArtifact ? getDocxQualityLabel(latestArtifact) : 'Sin analizar';
   const latestQualityTone = getDocxQualityTone(latestQualityStatus);
   const latestRenderLabel = latestArtifact ? getDocxRenderLabel(latestArtifact) : 'Sin render';
-  const latestRenderTone = latestArtifact ? getDocxRenderTone(getDocxRenderStatus(latestArtifact)) : 'muted';
   const primaryNotebookTarget = activeNotebook ? createResourceTarget(activeNotebook.path || activeNotebook.name, activeNotebook) : null;
   const latestArtifactTarget = latestArtifact ? createTarget('document', latestArtifact) : null;
   const latestQualityTarget = latestArtifact

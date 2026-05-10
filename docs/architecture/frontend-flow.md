@@ -1,7 +1,7 @@
 ﻿# Flujo del Frontend
 
 > **Framework:** React 18
-> **Última actualización:** 2026-05-03
+> **Última actualización:** 2026-05-09
 > **Contrato canónico:** `docs/architecture/contracts-catalog.md`
 
 ---
@@ -30,6 +30,7 @@
 | `PdfViewer.js` | render PDF controlado con metadata client-side, destinos internos y windowing |
 | `useMcpActivity.js` | feed MCP, toggle de espejo, `agentExecutionState` y badges de runs |
 | `useMcpMirror.js` | arbitraje y reproducción guiada de `mcp_mirror_event` sobre notebook/template |
+| `McpPanel.js` | panel `Agents`: estado start/stop/logs/activity y pestaña `Configuración` con presets MCP universales derivados de `/api/mcp/status.configuration` |
 | `NotebookEditor.js` | ciclo notebook result-first, ejecución por celda, outputs ricos, limpieza manual de resultados y render del estado shell-owned de `Run All` |
 | `TemplateEditor.js` | fachada del editor de plantillas DOCX; `TemplateEditorContainer` monta el workbench slots-first con navegación `Slots/Estilos/Diagnóstico`, edición central y rail de preview |
 | `MonacoEditorLSP.js` | edición de código + contrato LSP |
@@ -62,6 +63,7 @@
 17. `queued -> running` queda centralizado en un único auto-dispatcher del shell; si el kernel no aparece a tiempo, `App.js` dispara un timeout visible y limpia el batch en vez de dejar el rail pegado en `Iniciando kernel`.
 18. `NotificationCenter` renderiza ese feed, agrupa por tiempo, marca leídas al abrir el dropdown y decide entre CTA navegable o expansión inline según el contenido de cada card; la resolución real del `target` permanece en `App.js`. El dropdown vive en un portal fijo al `body`, se reposiciona por viewport y no depende del overflow del `DesktopTitleBar`.
 19. Para actividad MCP, `App.js` hidrata `/api/mcp/activity`, usa `mcp_activity_event` para feed/notificaciones/estado del agente y usa `mcp_mirror_event` para reproducir cambios granulares solo si `mirrorEnabled=true`; el modo espejo arranca en `OFF` cuando no existe preferencia previa, respeta el valor persistido y se autoactiva si el usuario hace `start/restart` MCP desde la propia UI.
+20. `McpPanel` consulta `/api/mcp/status.configuration` para mostrar una pestaña `Configuración` útil para cualquier cliente agentico: endpoint HTTP real, modo `stateful-http`, perfil `authoring`, backend REST/WS, preset `stdio` con variables `INSPYRO_BACKEND_*` y snippets copiables para Codex, Claude Code/Desktop, VS Code, Cursor y HTTP genérico.
 20. Cuando `workspaceSurface === 'home'`, `App.js` hidrata `GET /api/system/home-summary`, transforma ese payload backend en `workspaceData` UI-friendly y hace polling controlado solo mientras la home está visible; al pasar a `workspaceSurface='file'` desmonta ese polling y conserva solo refresh adicional al volver foco/online/visibility cuando la home reaparece.
 21. La home ya no depende de `templateInfo`, `docxHistoryEntries` ni del mount de `NotebookEditor`: usa `overview`, `notebook_runtime_items[]`, `code_runtime_items[]`, `recent_docx_items[]`, `mcp_service`, `mcp_clients[]` y `template_inventory[]` como snapshot workspace-scoped del shell. Antes de renderizar, `App.js` filtra recursos internos/generados (`_agent_runs`, `.inspyro`, `Docx_Documents`, demos/smoke), omite DOCX vacíos y superpone `notebookSessionsByPath` con `batchRunState` o `documentPipelineStatus` activo para que `Run All` shell-owned aparezca en Home en tiempo real aunque el resumen backend llegue rezagado o idle.
 22. `App.js` deriva además `workspaceData.operational` como capa frontend-local compatible con `cards`: `attentionItems` prioriza errores, ejecuciones activas, PDF compartido/en cola, DOCX pendientes de calidad/render y estado MCP; `lanes` conserva la esencia `Entender`, `Ejecutar`, `Entregar`; `quickActions` expone accesos a archivos, agentes, último DOCX y primer notebook útil.
@@ -97,7 +99,7 @@
 47. El barrido UI/UX del 2026-04-26 endurece las superficies shell-owned sin cambiar contratos: `DesktopTitleBar`, `NotebookToolbar` y `NotificationCenter` degradan por truncado/overflow antes de solaparse; `FileExplorer` y Quick Open separan basename/ruta; `DocxViewer` distingue preview activo de DOCX descargable histórico; y `VisualizationPanel` limpia targets stale por `filePath` para que prompts de dependencias queden inline y no como notificaciones persistentes.
 48. Los diálogos y modales del shell deben exponer controles nombrados y sin CTA duplicados: `Nuevo archivo` parte con nombre vacío, `NotebookIndexPanel` evita botones placeholder sin nombre, `McpPanel` nombra sus acciones icon-only y el editor de plantillas vacío muestra una acción primaria DOCX y una secundaria JSON en una sola zona.
 49. El hardening responsivo del 2026-04-28 agrega guards de layout reales: titlebar, Home, archivo, notebook, Agents, DOCX/Workbench y dependencias deben mantener controles críticos dentro del viewport, con scroll local en superficies secundarias y sin pares de controles superpuestos.
-50. El rediseño del Template Editor del 2026-05-01 aplica la misma regla a plantillas: header único sin footer duplicado, navegación por utilidad (`Slots`, `Estilos`, `Diagnóstico`), preview Word como rail de apoyo y guards responsive sobre desktop, 1024px, 760px y móvil.
+50. El rediseño del Template Editor aplica la misma regla a plantillas: header unico sin footer duplicado, navegacion por utilidad (`Slots`, `Estilos`, `Diagnostico`) y rail `Preview DOCX de ejemplo`; el preview default es un DOCX completo renderizado en frontend, mientras `Preview Word nativo` y `Abrir DOCX` son acciones explicitas sobre ese mismo Blob. Los guards responsivos cubren desktop, 1024px, 760px y movil.
 
 ---
 
@@ -118,6 +120,7 @@
 13. Drift entre el `batchRunState` shell-owned de `Run All` y lo que renderiza `NotebookEditor` si el shell deja de conservar la corrida por `path`, si el editor recupera ownership local al remontar, si las notificaciones visibles vuelven a depender del mount del editor o si la UI vuelve a bloquear el arranque durante el estado transitorio `connecting` del socket notebook dedicado.
 14. Drift entre la calidad/Workbench DOCX cacheada y la versión activa si el frontend usa `source_path` como identidad en vez de `artifact_id + binary_hash`, si promociona badges de un artefacto distinto al que descarga o si descarga un resource de Workbench/render cache sin validar `artifact_id`, `workbench_id` o `render_id`.
 15. Drift result-first si la selección de celdas vuelve a montar Monaco automáticamente, si Markdown enriquecido pierde GFM/LaTeX/Mermaid o ejecuta JS sin `HTML/JS confiable`, si los outputs ricos se pierden por MIME no reconocido o si `display_id` deja de reemplazar resultados live y duplica estados parciales.
+16. Drift entre la pestaña `Configuración` de `McpPanel` y el backend real si los snippets vuelven a asumir puertos fijos o si no distinguen servicio HTTP shell-owned de procesos `stdio` lanzados por clientes externos.
 
 ---
 
@@ -155,6 +158,7 @@
 28. Los estados visuales derivados del recurso activo deben estar anclados a `filePath`/origen estable; cambiar entre `.ipynb`, `.py` y Home no debe conservar placeholders, targets de dependencias, chips DOCX o CTAs de plantilla pertenecientes al recurso anterior.
 29. Los overlays del header, en especial `NotificationCenter`, deben portalizarse o ajustarse con clamp al viewport cuando el contenedor padre pueda envolver, truncar o recortar; los tests responsivos deben validar viewport y no solapes, no solo snapshots visuales.
 30. La experiencia notebook result-first debe validarse en desktop y móvil: código colapsado inicialmente, Markdown enriquecido visible, outputs visibles, MIME bundles inspeccionables, errores inline y sin solapes entre gutters, barras minimizadas y superficies de resultado.
+31. La configuración MCP visible debe derivarse siempre de `/api/mcp/status.configuration`: los presets no deben hardcodear `:8000` en desktop empaquetado ni recomendar `stateless-http` para notebooks.
 
 ---
 

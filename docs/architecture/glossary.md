@@ -1,6 +1,6 @@
 ﻿# Glosario Técnico Canónico
 
-> **Última actualización:** 2026-02-06
+> **Última actualización:** 2026-05-09
 
 ---
 
@@ -15,8 +15,9 @@
 | Handler direct | Handler atendido en la ruta principal del dispatcher (sin tarea de fondo). |
 | Handler background | Handler ejecutado con `create_task`, sin bloquear lectura del socket. |
 | DOCX hash | Hash del DOCX exportado para deduplicar y cachear conversiones PDF. |
-| Preview de estilo | Imagen de vista previa de un estilo Word generado por `template_service`. |
-| Preview de tabla | Miniatura de tabla detectada en template DOCX. |
+| Preview DOCX de ejemplo | Documento de muestra único generado por frontend para mostrar header/footer, títulos, cuerpo, captions, código, listas y tablas del Template Editor. |
+| Preview de estilo | Ruta legacy de vista previa de un estilo Word generada por `template_service` para clientes no migrados al DOCX de ejemplo. |
+| Preview de tabla | Ruta legacy de miniatura de tabla detectada en template DOCX. |
 | `templateInfo` | Estructura frontend con metadatos/estilos de la plantilla activa. |
 | `lastMessage` | Último mensaje recibido por WebSocket en hooks frontend. |
 | Source of truth | Documento canónico que prevalece en caso de conflicto documental. |

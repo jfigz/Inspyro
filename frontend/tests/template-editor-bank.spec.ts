@@ -41,6 +41,8 @@ const toNotebookSource = (source: string) => (
   source.split('\n').map((line, index, lines) => (index === lines.length - 1 ? line : `${line}\n`))
 );
 
+const FORMAT_CATEGORIES = ['body', 'headings', 'captions', 'lists', 'code', 'tables'];
+
 type BankReport = {
   runId: string;
   outputDir: string;
@@ -142,6 +144,61 @@ const fixtureById = (fixtures: any[], id: string) => {
   const fixture = fixtures.find((item) => item.id === id);
   if (!fixture) throw new Error(`Missing fixture ${id}`);
   return fixture;
+};
+
+const getPdfStatus = async (request: any, harness: any) => {
+  const response = await request.get(`${harness.urls.backend}/pdf-status`);
+  expect(response.ok()).toBeTruthy();
+  return response.json();
+};
+
+const decodePngFromDataUrl = (src: string | null) => {
+  expect(src).toMatch(/^data:image\/png;base64,/);
+  const bytes = Buffer.from(String(src).split(',')[1] || '', 'base64');
+  expect(bytes.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+  expect(bytes.length).toBeGreaterThan(500);
+  return bytes;
+};
+
+const expectWordPreviewForCurrentStyle = async (page: any, nativeWordAvailable: boolean) => {
+  await expect(page.getByTestId('template-sample-docx-preview')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('.word-preview-image')).toHaveCount(0, { timeout: 10000 });
+  await expect(page.getByTestId('template-open-sample-docx')).toBeVisible({ timeout: 15000 });
+  await page.getByTestId('template-native-word-preview').click();
+  if (!nativeWordAvailable) {
+    await expect(page.locator('.preview-status-line')).toContainText(/Preview JS|Microsoft Word|Word no/i, { timeout: 30000 });
+    await expect(page.getByTestId('template-sample-docx-preview')).toBeVisible();
+    return;
+  }
+  const image = page.locator('.word-preview-image');
+  await expect(image).toBeVisible({ timeout: 90000 });
+  decodePngFromDataUrl(await image.getAttribute('src'));
+};
+
+const validateCategoryPreviews = async (
+  page: any,
+  categories: string[],
+  nativeWordAvailable: boolean,
+  { requireNative = false } = {},
+) => {
+  const covered: string[] = [];
+  await page.getByTestId('template-sidebar-styles').click();
+  await expect(page.getByTestId('template-styles-panel')).toBeVisible({ timeout: 15000 });
+  await page.locator('.template-search-input').fill('');
+  for (const category of categories) {
+    const select = page.getByTestId(`template-category-select-${category}`);
+    if ((await select.count()) === 0) continue;
+    const card = page.locator('.category-browser-card').filter({ has: select });
+    await card.scrollIntoViewIfNeeded();
+    await card.click();
+    await expect(page.getByTestId('template-sample-docx-preview')).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('.word-preview-image')).toHaveCount(0, { timeout: 10000 });
+    if (requireNative) {
+      await expectWordPreviewForCurrentStyle(page, nativeWordAvailable);
+    }
+    covered.push(category);
+  }
+  return covered;
 };
 
 const appendBankCell = async (request: any, harness: any) => {
@@ -258,7 +315,9 @@ const installTemplateAttachSpy = async (page: any) => {
   await page.addInitScript(() => {
     const OriginalWebSocket = window.WebSocket;
     const attachMessages: any[] = [];
+    const templateMessages: any[] = [];
     (window as any).__templateBankAttachMessages = attachMessages;
+    (window as any).__templateBankTemplateMessages = templateMessages;
     function PatchedWebSocket(url: string | URL, protocols?: string | string[]) {
       const socket = protocols === undefined
         ? new OriginalWebSocket(url)
@@ -281,6 +340,26 @@ const installTemplateAttachSpy = async (page: any) => {
         }
         return originalSend(data);
       };
+      socket.addEventListener('message', (event: MessageEvent) => {
+        try {
+          if (typeof event.data !== 'string') return;
+          const message = JSON.parse(event.data);
+          if (['template_uploaded', 'template_error', 'error'].includes(message?.type)) {
+            templateMessages.push({
+              type: message.type,
+              request_id: message.request_id || null,
+              kernel_id: message.kernel_id || null,
+              error_code: message.error_code || null,
+              error: message.error || message.message || null,
+              template_token: message.template_token || null,
+              style_total: message.template?.style_coverage?.summary?.total ?? null,
+              at: Date.now(),
+            });
+          }
+        } catch {
+          // ignore non-JSON websocket frames
+        }
+      });
       return socket;
     }
     (PatchedWebSocket as any).prototype = OriginalWebSocket.prototype;
@@ -294,10 +373,13 @@ const installTemplateAttachSpy = async (page: any) => {
 test.describe.serial('Template Editor Exhaustive Bank', () => {
   test.setTimeout(360000);
 
-  test('covers template corpus, Word-complete editing and generated DOCX quality', async ({ page, harness, request }) => {
+  test('covers template corpus, Word-complete editing and generated DOCX quality', async ({ page, harness, request, consoleErrors }) => {
+    void consoleErrors;
     const report = createBankReport(harness);
     try {
       restoreSeedFixtures(harness, 'seeded');
+      const pdfStatus = await getPdfStatus(request, harness);
+      const nativeWordAvailable = Boolean(pdfStatus.word_available);
       await appendBankCell(request, harness);
       const resetDocxResponse = await request.post(`${harness.urls.backend}/api/docx/test/reset`, {
         data: { source_path: harness.files.reportNotebook },
@@ -331,25 +413,46 @@ test.describe.serial('Template Editor Exhaustive Bank', () => {
       await page.getByTestId('docx-template-button').click();
       await expect(page.getByTestId('template-editor')).toBeVisible({ timeout: 30000 });
 
+      await runScenario(report, 'fixture preview corpus internal', 'minimal-complete-localized', async () => {
+        const coveredByFixture: Record<string, string[]> = {};
+        for (const fixtureId of ['minimal', 'complete', 'localized']) {
+          const fixture = fixtureById(generated!.fixtures, fixtureId);
+          await page.locator('input[type="file"][accept=".docx"]').setInputFiles(fixture.path);
+          await expect(page.getByTestId('template-sidebar-slots')).toBeVisible({ timeout: 90000 });
+          await expect(page.getByTestId('template-upload-button')).toBeEnabled({ timeout: 90000 });
+          const requiredCategories = fixtureId === 'minimal'
+            ? FORMAT_CATEGORIES.filter((category) => !['captions', 'code'].includes(category))
+            : FORMAT_CATEGORIES;
+          const covered = await validateCategoryPreviews(page, requiredCategories, nativeWordAvailable);
+          expect(covered).toEqual(expect.arrayContaining(requiredCategories));
+          coveredByFixture[fixtureId] = covered;
+        }
+        return { details: { covered_by_fixture: coveredByFixture } };
+      });
+
       await runScenario(report, 'upload attach once', 'word_complete', async () => {
+        const attachBefore = await page.evaluate(() => ((window as any).__templateBankAttachMessages || []).length);
         await page.locator('input[type="file"][accept=".docx"]').setInputFiles(wordCompleteFixture.path);
         await expect(page.getByTestId('template-sidebar-slots')).toBeVisible({ timeout: 90000 });
-        await expect(page.getByText(/Bank Hidden Internal/i).first()).toBeVisible({ timeout: 60000 });
+        await expect(page.getByTestId('template-upload-button')).toBeEnabled({ timeout: 90000 });
         const attachMessages = await page.evaluate(() => (window as any).__templateBankAttachMessages || []);
-        expect(attachMessages.length).toBe(1);
+        expect(attachMessages.length - attachBefore).toBe(1);
+        const coveredWordComplete = await validateCategoryPreviews(page, FORMAT_CATEGORIES, nativeWordAvailable, { requireNative: true });
+        expect(coveredWordComplete).toEqual(expect.arrayContaining(FORMAT_CATEGORIES));
         return {
-          details: { attach_messages: attachMessages.length },
+          details: { attach_messages: attachMessages.length, native_word_available: nativeWordAvailable, covered: coveredWordComplete },
           artifacts: { fixture_path: wordCompleteFixture.path },
         };
       });
 
       await runScenario(report, 'slots styles diagnostics hidden toggle', 'word_complete', async () => {
+        await page.getByTestId('template-sidebar-slots').click();
         await expect(page.getByTestId('template-slots-panel')).toBeVisible();
         await page.getByTestId('template-sidebar-styles').click();
         await expect(page.getByTestId('template-styles-panel')).toBeVisible();
         await expect(page.getByText('Bank Hidden Internal')).toHaveCount(0);
         await page.getByTestId('template-show-hidden-styles').check();
-        await expect(page.getByText('Bank Hidden Internal').first()).toBeVisible({ timeout: 15000 });
+        await expect(page.locator('option', { hasText: 'Bank Hidden Internal' })).toHaveCount(1, { timeout: 15000 });
         await page.locator('.template-search-input').fill('Bank Word Complete');
         await expect(page.getByTestId('template-category-select-body').locator('option', { hasText: 'Bank Word Complete' })).toHaveCount(1);
         await page.getByTestId('template-sidebar-diagnostics').click();
@@ -374,24 +477,25 @@ test.describe.serial('Template Editor Exhaustive Bank', () => {
 
         await page.locator('details.word-complete-details summary').click();
         await page.getByTestId('template-word-complete-toggle').click();
-        await page.getByTestId('template-word-style-metadata').fill(JSON.stringify({ ui_priority: 5 }, null, 2));
-        await page.getByTestId('template-word-style-visibility').fill(JSON.stringify({
-          q_format: false,
-          semi_hidden: true,
-          unhide_when_used: true,
-        }, null, 2));
-        await page.getByTestId('template-word-style-font').fill(JSON.stringify({
-          complex_script_font_name: 'Aptos',
-          east_asia_font_name: 'Aptos',
-          language: 'es-CL',
-          kerning_pt: 10,
-          character_spacing_twips: '24',
-          position_pt: 2,
-        }, null, 2));
-        await page.getByTestId('template-word-style-paragraph').fill(JSON.stringify({
-          contextual_spacing: true,
-          tabs: [{ val: 'right', leader: 'dot', pos_twips: '4320' }],
-        }, null, 2));
+        await page.getByTestId('template-word-tab-identity').click();
+        await page.getByTestId('template-word-style-ui-priority').fill('5');
+        await page.getByTestId('template-word-style-q-format').uncheck();
+        await page.getByTestId('template-word-style-semi-hidden').check();
+        await page.getByTestId('template-word-style-unhide-when-used').check();
+        await page.getByTestId('template-word-tab-font').click();
+        await page.getByTestId('template-word-font-complex-script').fill('Aptos');
+        await page.getByTestId('template-word-font-east-asia').fill('Aptos');
+        await page.getByTestId('template-word-font-language').fill('es-CL');
+        await page.getByTestId('template-word-font-kerning').fill('10');
+        await page.getByTestId('template-word-font-spacing').fill('24');
+        await page.getByTestId('template-word-font-position').fill('2');
+        await page.getByTestId('template-word-tab-paragraph').click();
+        await page.getByTestId('template-word-paragraph-contextual-spacing').check();
+        await page.getByTestId('template-word-paragraph-tab-pos').fill('4320');
+        await page.getByTestId('template-word-paragraph-tab-val').selectOption('right');
+        await page.getByTestId('template-word-paragraph-tab-leader').selectOption('dot');
+        await page.getByTestId('template-word-paragraph-shading-fill').fill('F2F2F2');
+        await page.getByTestId('template-word-paragraph-border-bottom-color').fill('1B4965');
         await page.getByRole('button', { name: /Guardar Cambios/i }).click();
         await expect(page.locator('.edit-panel-header')).not.toContainText(/Sin guardar/i, { timeout: 90000 });
         return { details: { quick_size_pt: 12, word_complete: true } };

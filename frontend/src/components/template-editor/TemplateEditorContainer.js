@@ -24,6 +24,12 @@ import StyleEditPanel from './StyleEditPanel';
 import TableDirectFormatPanel from './TableDirectFormatPanel';
 import useStylePreviewPipeline from './hooks/useStylePreviewPipeline';
 import useTablePreviewQueue from './hooks/useTablePreviewQueue';
+import {
+    blobToBase64,
+    buildTemplateSampleDocxBlob,
+    createTemplateSamplePreviewModel,
+    renderTemplateSampleDocxPreview,
+} from './sampleDocxPreview';
 import { WS_MESSAGE_TYPES as WS_MSG } from '../../contracts/wsMessageTypes.generated';
 import { API_BASE } from '../../config/endpoints';
 import { createFrontendLogger } from '../../utils/frontendLogger';
@@ -43,6 +49,7 @@ const PREVIEW_DEBOUNCE_MS = 1000;  // Debounce delay for auto-preview (FIX #12: 
 const PREVIEW_TIMEOUT_MS = 45000;  // Timeout for style preview generation
 const TABLE_PREVIEW_TIMEOUT_MS = 60000; // Timeout per table preview request on large templates
 const PREVIEW_CACHE_MAX = 48;  // Maximum number of cached preview images
+const SAMPLE_DOCX_PREVIEW_DEBOUNCE_MS = 250;
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const TEMPLATE_EXPORT_COMPAT_VERSIONS = new Set(['1.0', '1.1']);
 const STYLE_BROWSER_ORDER = ['titles', 'headings', 'body', 'lists', 'tables', 'code', 'captions', 'other'];
@@ -541,6 +548,20 @@ const readFileAsText = async (file) => {
     });
 };
 
+const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+    if (!file) {
+        reject(new Error('No se recibio ningun archivo.'));
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+        const value = typeof reader.result === 'string' ? reader.result : '';
+        resolve(value.includes(',') ? value.split(',').pop() : value);
+    };
+    reader.onerror = () => reject(reader.error || new Error('No fue posible leer el archivo.'));
+    reader.readAsDataURL(file);
+});
+
 // =============================================================================
 // BIDIRECTIONAL SYNC: OOXML nodes <-> UI state
 // =============================================================================
@@ -773,6 +794,50 @@ const buildTablePreviewSignature = (stylePayload = null) => {
     }
 };
 
+const hashPreviewSource = (value) => {
+    let hash = 5381;
+    const text = String(value || '');
+    for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash << 5) + hash) + text.charCodeAt(index);
+        hash &= 0xffffffff;
+    }
+    return Math.abs(hash).toString(36);
+};
+
+const buildTablePreviewProps = (stylePayload = null) => {
+    const tableFormat = (
+        stylePayload?.resolved_table_format
+        || stylePayload?.xml_table_format
+        || stylePayload?.table
+        || {}
+    );
+    if (!tableFormat || typeof tableFormat !== 'object') return {};
+    const look = tableFormat.look && typeof tableFormat.look === 'object' ? tableFormat.look : {};
+    return {
+        table_border_style: tableFormat.border_style || tableFormat.table_border_style || null,
+        table_border_size_pt: tableFormat.border_size_pt ?? tableFormat.table_border_size_pt ?? null,
+        table_border_color: tableFormat.border_color || tableFormat.table_border_color || null,
+        table_shading_color: tableFormat.shading_color || tableFormat.table_shading_color || null,
+        table_alignment: tableFormat.alignment || tableFormat.table_alignment || null,
+        table_layout_type: tableFormat.layout_type || tableFormat.table_layout_type || null,
+        table_cell_spacing_pt: tableFormat.cell_spacing_pt ?? tableFormat.table_cell_spacing_pt ?? null,
+        table_width_type: tableFormat.width_type || tableFormat.table_width_type || null,
+        table_width_value: tableFormat.width_value ?? tableFormat.table_width_value ?? null,
+        table_look_first_row: tableFormat.look_first_row ?? tableFormat.table_look_first_row ?? look.first_row ?? null,
+        table_look_last_row: tableFormat.look_last_row ?? tableFormat.table_look_last_row ?? look.last_row ?? null,
+        table_look_first_column: tableFormat.look_first_column ?? tableFormat.table_look_first_column ?? look.first_column ?? null,
+        table_look_last_column: tableFormat.look_last_column ?? tableFormat.table_look_last_column ?? look.last_column ?? null,
+        table_look_no_h_band: tableFormat.look_no_h_band ?? tableFormat.table_look_no_h_band ?? look.no_h_band ?? null,
+        table_look_no_v_band: tableFormat.look_no_v_band ?? tableFormat.table_look_no_v_band ?? look.no_v_band ?? null,
+        table_cell_margin_top_pt: tableFormat.cell_margin_top_pt ?? tableFormat.table_cell_margin_top_pt ?? null,
+        table_cell_margin_bottom_pt: tableFormat.cell_margin_bottom_pt ?? tableFormat.table_cell_margin_bottom_pt ?? null,
+        table_cell_margin_left_pt: tableFormat.cell_margin_left_pt ?? tableFormat.table_cell_margin_left_pt ?? null,
+        table_cell_margin_right_pt: tableFormat.cell_margin_right_pt ?? tableFormat.table_cell_margin_right_pt ?? null,
+        table_cell_shading_color: tableFormat.cell_shading_color || tableFormat.table_cell_shading_color || null,
+        table_cell_vertical_align: tableFormat.cell_vertical_align || tableFormat.table_cell_vertical_align || null,
+    };
+};
+
 const StatusBadge = ({ status }) => {
     const config = {
         defined: { color: '#4ade80', bg: '#14532d', icon: '✓', label: 'Definido' },
@@ -851,6 +916,26 @@ const borderStyleFromWord = (value) => {
     return 'solid';
 };
 
+const buildParagraphBorderStyle = (paragraph = {}) => {
+    const borders = paragraph.borders && typeof paragraph.borders === 'object' ? paragraph.borders : {};
+    const style = {};
+    Object.entries({
+        top: 'borderTop',
+        right: 'borderRight',
+        bottom: 'borderBottom',
+        left: 'borderLeft',
+    }).forEach(([side, cssProp]) => {
+        const border = borders[side];
+        if (!border || typeof border !== 'object') return;
+        const borderStyle = borderStyleFromWord(border.style || border.val);
+        if (borderStyle === 'none') return;
+        const width = Number(border.size_pt ?? border.size ?? 0.75) || 0.75;
+        const color = normalizePreviewColor(border.color, '#94a3b8');
+        style[cssProp] = `${width}pt ${borderStyle} ${color}`;
+    });
+    return style;
+};
+
 const TemplateInternalPreview = ({
     styleName,
     font,
@@ -870,8 +955,15 @@ const TemplateInternalPreview = ({
     const tableBorderColor = normalizePreviewColor(tableFormat?.border_color || tableFormat?.table_border_color, '#94a3b8');
     const tableBorderWidth = Number(tableFormat?.border_size_pt ?? tableFormat?.table_border_size_pt ?? 0.75) || 0.75;
     const tableShading = normalizePreviewColor(tableFormat?.shading_color || tableFormat?.table_shading_color, '#f8fafc');
+    const cellShading = normalizePreviewColor(tableFormat?.cell_shading_color || tableFormat?.table_cell_shading_color, '#ffffff');
+    const cellVerticalAlign = String(tableFormat?.cell_vertical_align || tableFormat?.table_cell_vertical_align || 'middle').toLowerCase();
     const cellPaddingY = Number(tableFormat?.cell_margin_top_pt ?? tableFormat?.table_cell_margin_top_pt ?? 4) || 4;
     const cellPaddingX = Number(tableFormat?.cell_margin_left_pt ?? tableFormat?.table_cell_margin_left_pt ?? 6) || 6;
+    const paragraphShading = normalizePreviewColor(paragraph?.shading?.fill, null);
+    const paragraphFrameStyle = {
+        ...(paragraphShading ? { backgroundColor: paragraphShading, padding: '4pt 6pt' } : {}),
+        ...buildParagraphBorderStyle(paragraph),
+    };
     const sampleText = isCaption
         ? 'Figura 1. Texto de ejemplo'
         : isHeading
@@ -889,7 +981,9 @@ const TemplateInternalPreview = ({
                             borderColor: tableBorderColor,
                             '--template-table-border': `${tableBorderWidth}pt ${borderStyleFromWord(tableFormat?.border_style || tableFormat?.table_border_style)} ${tableBorderColor}`,
                             '--template-table-header-bg': tableShading,
+                            '--template-table-cell-bg': cellShading,
                             '--template-table-cell-padding': `${cellPaddingY}pt ${cellPaddingX}pt`,
+                            '--template-table-cell-valign': cellVerticalAlign,
                         }}
                     >
                         <tbody>
@@ -905,15 +999,15 @@ const TemplateInternalPreview = ({
                         </tbody>
                     </table>
                 ) : isList ? (
-                    <ul className="template-internal-list" style={textStyle}>
+                    <ul className="template-internal-list" style={{ ...textStyle, ...paragraphFrameStyle }}>
                         <li>Primer item con el estilo seleccionado</li>
                         <li>Segundo item para revisar sangria</li>
                         <li>Tercer item con interlineado visible</li>
                     </ul>
                 ) : isCode ? (
-                    <pre className="template-internal-code" style={textStyle}>{'for carga in cargas:\n    revisar(carga)'}</pre>
+                    <pre className="template-internal-code" style={{ ...textStyle, ...paragraphFrameStyle }}>{'for carga in cargas:\n    revisar(carga)'}</pre>
                 ) : (
-                    <p className="template-internal-paragraph" style={textStyle}>{sampleText}</p>
+                    <p className="template-internal-paragraph" style={{ ...textStyle, ...paragraphFrameStyle }}>{sampleText}</p>
                 )}
             </div>
         </div>
@@ -1166,6 +1260,8 @@ const TemplateEditor = ({
     onTemplateUpload,
     onTemplateBind,
     isOpeningPersistedTemplate = false,
+    templateDocxBase64 = '',
+    enableTemplateSourceFetch = false,
 }) => {
     const [selectedStyle, setSelectedStyle] = useState(null);
     const [categoryOverrides, setCategoryOverrides] = useState({});
@@ -1181,6 +1277,8 @@ const TemplateEditor = ({
 
     const templateInputRef = useRef(null);
     const templateJsonInputRef = useRef(null);
+    const samplePreviewContainerRef = useRef(null);
+    const samplePreviewSeqRef = useRef(0);
     const pendingImportedSemanticSlotsRef = useRef(null);
 
     const skipNextTemplateInfoResetRef = useRef(false);
@@ -1199,10 +1297,33 @@ const TemplateEditor = ({
     const hasPendingTemplateAction = useCallback(() => (
         Object.values(pendingActionRequestsRef.current || {}).some(Boolean)
     ), []);
+    const [samplePreviewBlob, setSamplePreviewBlob] = useState(null);
+    const [samplePreviewBase64, setSamplePreviewBase64] = useState('');
+    const [samplePreviewKey, setSamplePreviewKey] = useState('');
+    const [samplePreviewStatus, setSamplePreviewStatus] = useState('idle');
+    const [samplePreviewError, setSamplePreviewError] = useState('');
+    const [templateSourceDocx, setTemplateSourceDocx] = useState({
+        base64: '',
+        fingerprint: '',
+        status: 'idle',
+        error: '',
+    });
+    const [sampleWordPreview, setSampleWordPreview] = useState({
+        previewKey: null,
+        pages: [],
+        warnings: [],
+        converterUsed: null,
+        isLoading: false,
+        error: null,
+    });
+    const [isOpeningSampleDocx, setIsOpeningSampleDocx] = useState(false);
+    const [previewRailWidth, setPreviewRailWidth] = useState(620);
+    const [isPreviewRailResizing, setIsPreviewRailResizing] = useState(false);
 
     const {
         previewImage,
-        setPreviewImage,
+        previewImageKey,
+        setPreviewImageForKey,
         isPreviewLoading,
         setIsPreviewLoading,
         previewInFlightRef,
@@ -1848,6 +1969,73 @@ const TemplateEditor = ({
         logger.info('Preview cache cleared due to template change');
     }, [templateInfo, templateResetFingerprint, resetStylePreviewPipeline, resetTablePreviewState]);
 
+    useEffect(() => {
+        const directBase64 = String(templateDocxBase64 || templateInfo?.docx_base64 || templateInfo?.sourceBase64 || '').trim();
+        if (directBase64 && !enableTemplateSourceFetch) {
+            setTemplateSourceDocx({
+                base64: directBase64,
+                fingerprint: `inline:${hashPreviewSource(directBase64.slice(0, 8192))}:${directBase64.length}`,
+                status: 'ready',
+                error: '',
+            });
+            return undefined;
+        }
+
+        if (!templateInfo || !kernelId || !enableTemplateSourceFetch) {
+            setTemplateSourceDocx({
+                base64: directBase64 || '',
+                fingerprint: directBase64 ? `inline:${hashPreviewSource(directBase64.slice(0, 8192))}:${directBase64.length}` : '',
+                status: directBase64 ? 'ready' : 'idle',
+                error: '',
+            });
+            return undefined;
+        }
+
+        let cancelled = false;
+        const requestKey = `${kernelId}:${templateResetFingerprint || 'template'}`;
+        setTemplateSourceDocx({
+            base64: '',
+            fingerprint: requestKey,
+            status: 'loading',
+            error: '',
+        });
+
+        fetch(`${API_BASE}/api/templates/export?kernel_id=${encodeURIComponent(kernelId)}`)
+            .then(async (response) => {
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    const detail = payload?.detail?.message || payload?.detail || payload?.message || 'No se pudo leer el DOCX activo para el preview.';
+                    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+                }
+                const base64 = String(payload?.docx_base64 || '').trim();
+                if (!base64) {
+                    throw new Error('El export de plantilla no incluyo docx_base64.');
+                }
+                if (cancelled) return;
+                setTemplateSourceDocx({
+                    base64,
+                    fingerprint: `${requestKey}:${payload?.file_name || ''}:${base64.length}:${hashPreviewSource(base64.slice(0, 8192))}`,
+                    status: 'ready',
+                    error: '',
+                });
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                setTemplateSourceDocx({
+                    base64: directBase64 || '',
+                    fingerprint: directBase64
+                        ? `${requestKey}:inline-fallback:${directBase64.length}:${hashPreviewSource(directBase64.slice(0, 8192))}`
+                        : `${requestKey}:fallback`,
+                    status: directBase64 ? 'ready' : 'error',
+                    error: error?.message || 'No se pudo leer el DOCX activo para el preview.',
+                });
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [enableTemplateSourceFetch, kernelId, templateDocxBase64, templateInfo, templateResetFingerprint]);
+
     // Listen for preview responses
     useEffect(() => {
         if (!lastMessage) return;
@@ -1880,14 +2068,15 @@ const TemplateEditor = ({
             const isActiveResponse = Boolean(matchesKey || matchesRequest || fallbackMatchesStyleOnly);
 
             const canApplyResponse = isActiveResponse && matchesStyle && Boolean(lastMessage.preview_png_base64);
+            const responsePreviewKey = previewKey || previewInFlightRef.current.previewKey || selectedStylePreviewKey;
 
             // Ignore stale/out-of-flight responses entirely to keep cache/UI coherent.
-            if (canApplyResponse && previewKey) {
-                cachePreview(previewKey, lastMessage.preview_png_base64);
+            if (canApplyResponse && responsePreviewKey) {
+                cachePreview(responsePreviewKey, lastMessage.preview_png_base64);
             }
 
             if (canApplyResponse) {
-                setPreviewImage(lastMessage.preview_png_base64);
+                setPreviewImageForKey(responsePreviewKey, lastMessage.preview_png_base64);
                 setIsPreviewLoading(false);
             }
 
@@ -1926,24 +2115,26 @@ const TemplateEditor = ({
 
         if (lastMessage.type === WS_MSG.TEMPLATE_UPLOADED) {
             const pendingUploadId = pendingActionRequestsRef.current.template_upload;
-            if (!pendingUploadId || !messageRequestId || pendingUploadId === messageRequestId) {
-                pendingActionRequestsRef.current.template_upload = null;
-                setIsUploadingTemplate(false);
-                if (templateInputRef.current) {
-                    templateInputRef.current.value = '';
-                }
-                if (templateJsonInputRef.current) {
-                    templateJsonInputRef.current.value = '';
-                }
-                if (!pendingImportedSemanticSlotsRef.current) {
-                    const headerCount = Array.isArray(lastMessage.template?.headers) ? lastMessage.template.headers.filter((item) => typeof item === 'string' && item.trim()).length : 0;
-                    const footerCount = Array.isArray(lastMessage.template?.footers) ? lastMessage.template.footers.filter((item) => typeof item === 'string' && item.trim()).length : 0;
-                    const detectedParts = [];
-                    if (headerCount > 0) detectedParts.push(`${headerCount} encabezado(s)`);
-                    if (footerCount > 0) detectedParts.push(`${footerCount} pie(s)`);
-                    const detail = detectedParts.length > 0 ? ` Se detectaron ${detectedParts.join(' y ')}.` : '';
-                    onStatusMessage?.(`Plantilla aplicada al kernel.${detail} Reejecuta la celda para regenerar DOCX/PDF con el formato actualizado.`, 'success');
-                }
+            const matchesPendingUpload = !pendingUploadId || !messageRequestId || pendingUploadId === messageRequestId;
+            if (!matchesPendingUpload) {
+                return;
+            }
+            pendingActionRequestsRef.current.template_upload = null;
+            setIsUploadingTemplate(false);
+            if (templateInputRef.current) {
+                templateInputRef.current.value = '';
+            }
+            if (templateJsonInputRef.current) {
+                templateJsonInputRef.current.value = '';
+            }
+            if (!pendingImportedSemanticSlotsRef.current) {
+                const headerCount = Array.isArray(lastMessage.template?.headers) ? lastMessage.template.headers.filter((item) => typeof item === 'string' && item.trim()).length : 0;
+                const footerCount = Array.isArray(lastMessage.template?.footers) ? lastMessage.template.footers.filter((item) => typeof item === 'string' && item.trim()).length : 0;
+                const detectedParts = [];
+                if (headerCount > 0) detectedParts.push(`${headerCount} encabezado(s)`);
+                if (footerCount > 0) detectedParts.push(`${footerCount} pie(s)`);
+                const detail = detectedParts.length > 0 ? ` Se detectaron ${detectedParts.join(' y ')}.` : '';
+                onStatusMessage?.(`Plantilla aplicada al kernel.${detail} Reejecuta la celda para regenerar DOCX/PDF con el formato actualizado.`, 'success');
             }
             applyAuthoritativeTemplatePayload(lastMessage.template, {
                 refreshSelection: !pendingImportedSemanticSlotsRef.current,
@@ -2111,7 +2302,8 @@ const TemplateEditor = ({
         previewInFlightRef,
         previewTimeoutRef,
         setIsPreviewLoading,
-        setPreviewImage,
+        setPreviewImageForKey,
+        selectedStylePreviewKey,
     ]);
 
     useEffect(() => {
@@ -2122,8 +2314,8 @@ const TemplateEditor = ({
         }
 
         const cached = getCachedPreview(selectedStylePreviewKey);
-        setPreviewImage(cached);
-    }, [selectedStylePreviewKey, getCachedPreview, resetStylePreviewPipeline, setPreviewImage]);
+        setPreviewImageForKey(selectedStylePreviewKey, cached);
+    }, [selectedStylePreviewKey, getCachedPreview, resetStylePreviewPipeline, setPreviewImageForKey]);
 
     const handleStyleUpdate = useCallback((styleName, updates) => {
         if (!sendMessage || !kernelId) return;
@@ -2309,15 +2501,11 @@ const TemplateEditor = ({
             return false;
         }
 
-        const sent = sendMessage?.({
-            type: WS_MSG.TEMPLATE_ATTACH,
-            request_id: requestId,
-            kernel_id: kernelId,
-            template_token: templateToken,
-        });
-        if (sent === false) {
-            failUpload('No se pudo adjuntar la plantilla al kernel. Revisa la conexiÃ³n del editor de plantillas.');
-            return false;
+        let sourceBase64 = null;
+        try {
+            sourceBase64 = await readFileAsBase64(file);
+        } catch (error) {
+            sourceBase64 = null;
         }
 
         onTemplateUpload?.({
@@ -2325,10 +2513,10 @@ const TemplateEditor = ({
             requestId,
             sizeBytes: data?.size_bytes ?? null,
             sha256: data?.sha256 ?? null,
-            attachSent: true,
+            sourceBase64,
         });
         return true;
-    }, [kernelId, nextActionRequestId, onStatusMessage, onTemplateUpload, resetTemplateInputs, sendMessage]);
+    }, [kernelId, nextActionRequestId, onStatusMessage, onTemplateUpload, resetTemplateInputs]);
 
     const handleImportJsonClick = useCallback(() => {
         templateJsonInputRef.current?.click();
@@ -2495,11 +2683,16 @@ const TemplateEditor = ({
 
     // Reset states when template changes
     useEffect(() => {
+        if (pendingActionRequestsRef.current.template_upload) {
+            pendingActionRequestsRef.current.template_upload = null;
+            pendingImportedSemanticSlotsRef.current = null;
+            resetTemplateInputs();
+        }
         setIsUploadingTemplate(false);
         if (!hasPendingTemplateAction()) {
             setIsUpdating(false);
         }
-    }, [hasPendingTemplateAction, templateInfo]);
+    }, [hasPendingTemplateAction, resetTemplateInputs, templateInfo]);
 
     const handleApplyDirectTableFormat = useCallback((tableIndex) => {
         const targetStyleName = selectedStyle?.style?.name || selectedStyle?.display_name || selectedStyle?.name || null;
@@ -2550,6 +2743,7 @@ const TemplateEditor = ({
         return {
             ...selectedStyleEffectiveFont,
             ...selectedStyleEffectiveParagraph,
+            ...buildTablePreviewProps(selectedStyle.style),
             style_type: selectedStyle.style?.type || selectedStyle.style_type || null,
             category: selectedStyle.category || selectedStyle.style?.category || null,
             style_id: selectedStyle.style?.style_id || selectedStyle.style_id || null,
@@ -2568,14 +2762,6 @@ const TemplateEditor = ({
     const selectedStyleNameForPreview = selectedStyle && selectedStyle.kind !== 'global'
         ? (selectedStyle.style?.name || selectedStyle.name || selectedStyle.display_name)
         : null;
-    const handleRailPreview = useCallback(() => {
-        if (!selectedStyleNameForPreview || !selectedStylePreviewPayload) return;
-        handleRequestPreview(selectedStyleNameForPreview, selectedStylePreviewPayload, {
-            immediate: true,
-            force: true,
-            previewEngine: 'word_native',
-        });
-    }, [handleRequestPreview, selectedStyleNameForPreview, selectedStylePreviewPayload]);
 
     const templateSecondaryActions = useMemo(() => ([
         {
@@ -2632,8 +2818,288 @@ const TemplateEditor = ({
     const previewRailTitle = isSlotsMode && templateInfo
         ? `${selectedSemanticSlot?.label || 'Slot'} -> ${selectedStyleDisplayName || 'Sin estilo asignado'}`
         : (selectedStyleDisplayName || 'Selecciona un estilo');
+    const handlePreviewRailResizeStart = useCallback((event) => {
+        if (typeof window === 'undefined' || window.innerWidth <= 1240) return;
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = previewRailWidth;
+        const minWidth = 420;
+        const maxWidth = Math.max(520, Math.min(window.innerWidth * 0.72, 980));
+        setIsPreviewRailResizing(true);
+
+        const handleMove = (moveEvent) => {
+            const delta = startX - moveEvent.clientX;
+            const nextWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + delta));
+            setPreviewRailWidth(Math.round(nextWidth));
+        };
+        const handleUp = () => {
+            setIsPreviewRailResizing(false);
+            window.removeEventListener('pointermove', handleMove);
+            window.removeEventListener('pointerup', handleUp);
+            window.removeEventListener('pointercancel', handleUp);
+        };
+
+        window.addEventListener('pointermove', handleMove);
+        window.addEventListener('pointerup', handleUp);
+        window.addEventListener('pointercancel', handleUp);
+    }, [previewRailWidth]);
+    const samplePreviewModel = useMemo(() => {
+        if (!templateInfo) return null;
+        return createTemplateSamplePreviewModel({
+            templateInfo,
+            resolvedSemanticSlotEntries,
+            resolvedCategorySelections,
+            browserCategories,
+            selectedStyle,
+            selectedSemanticSlotName,
+            showTableDirectPanel,
+            selectedDirectTable,
+            documentTables,
+            templateResetFingerprint,
+            templateSourceFingerprint: templateSourceDocx.fingerprint,
+        }) || {
+            previewKey: `sample-docx:${templateResetFingerprint || 'template'}`,
+            activeSection: 'body',
+            sections: [],
+            metadata: {},
+        };
+    }, [
+        browserCategories,
+        documentTables,
+        resolvedCategorySelections,
+        resolvedSemanticSlotEntries,
+        selectedDirectTable,
+        selectedSemanticSlotName,
+        selectedStyle,
+        showTableDirectPanel,
+        templateInfo,
+        templateResetFingerprint,
+        templateSourceDocx.fingerprint,
+    ]);
+    const activeSampleWordPreviewPages = useMemo(() => (
+        sampleWordPreview.previewKey === samplePreviewKey && Array.isArray(sampleWordPreview.pages)
+            ? sampleWordPreview.pages
+            : []
+    ), [samplePreviewKey, sampleWordPreview]);
+    const isSampleWordPreviewVisible = activeSampleWordPreviewPages.length > 0;
+    const samplePreviewStatusText = useMemo(() => {
+        if (sampleWordPreview.isLoading) return 'Renderizando el mismo DOCX con Word nativo...';
+        if (isOpeningSampleDocx) return 'Abriendo el DOCX de ejemplo con la app por defecto...';
+        if (sampleWordPreview.previewKey === samplePreviewKey && sampleWordPreview.error) return sampleWordPreview.error;
+        if (sampleWordPreview.previewKey === samplePreviewKey && sampleWordPreview.warnings?.length) {
+            return sampleWordPreview.warnings.join(' ');
+        }
+        if (samplePreviewError) return samplePreviewError;
+        if (templateSourceDocx.status === 'loading') return 'Cargando DOCX activo para conservar estilos reales...';
+        if (samplePreviewStatus === 'building') return 'Generando DOCX de ejemplo en el navegador...';
+        if (samplePreviewStatus === 'rendering') return 'Renderizando paginas DOCX en el navegador...';
+        if (isSampleWordPreviewVisible) {
+            const pageCount = activeSampleWordPreviewPages.length;
+            return `Preview Word nativo listo (${pageCount} pagina${pageCount === 1 ? '' : 's'}).`;
+        }
+        if (templateSourceDocx.status === 'error') {
+            return `${templateSourceDocx.error} Preview JS en fallback generado.`;
+        }
+        if (templateSourceDocx.status === 'ready' && templateSourceDocx.base64) {
+            return 'Preview JS listo con estilos, encabezados y tablas del DOCX activo.';
+        }
+        return 'Preview JS listo; Word nativo solo corre con el boton.';
+    }, [
+        activeSampleWordPreviewPages.length,
+        isOpeningSampleDocx,
+        isSampleWordPreviewVisible,
+        samplePreviewError,
+        samplePreviewKey,
+        samplePreviewStatus,
+        sampleWordPreview,
+        templateSourceDocx.base64,
+        templateSourceDocx.error,
+        templateSourceDocx.status,
+    ]);
+
+    useEffect(() => {
+        if (!samplePreviewModel) {
+            setSamplePreviewBlob(null);
+            setSamplePreviewBase64('');
+            setSamplePreviewKey('');
+            setSamplePreviewStatus('idle');
+            setSamplePreviewError('');
+            setSampleWordPreview({
+                previewKey: null,
+                pages: [],
+                warnings: [],
+                converterUsed: null,
+                isLoading: false,
+                error: null,
+            });
+            return undefined;
+        }
+        if (enableTemplateSourceFetch && templateInfo && templateSourceDocx.status === 'loading' && !templateSourceDocx.base64) {
+            setSamplePreviewBlob(null);
+            setSamplePreviewBase64('');
+            setSamplePreviewKey(samplePreviewModel.previewKey);
+            setSamplePreviewStatus('building');
+            setSamplePreviewError('');
+            setSampleWordPreview({
+                previewKey: null,
+                pages: [],
+                warnings: [],
+                converterUsed: null,
+                isLoading: false,
+                error: null,
+            });
+            return undefined;
+        }
+
+        const seq = samplePreviewSeqRef.current + 1;
+        samplePreviewSeqRef.current = seq;
+        setSamplePreviewStatus('building');
+        setSamplePreviewError('');
+        setSampleWordPreview((previous) => (
+            previous.previewKey === samplePreviewModel.previewKey
+                ? previous
+                : {
+                    previewKey: null,
+                    pages: [],
+                    warnings: [],
+                    converterUsed: null,
+                    isLoading: false,
+                    error: null,
+                }
+        ));
+
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                const blob = await buildTemplateSampleDocxBlob(samplePreviewModel, {
+                    templateDocxBase64: templateSourceDocx.base64,
+                });
+                const base64 = await blobToBase64(blob);
+                if (samplePreviewSeqRef.current !== seq) return;
+                setSamplePreviewBlob(blob);
+                setSamplePreviewBase64(base64);
+                setSamplePreviewKey(samplePreviewModel.previewKey);
+                setSamplePreviewStatus('ready');
+            } catch (error) {
+                if (samplePreviewSeqRef.current !== seq) return;
+                logger.error('No se pudo generar el DOCX de ejemplo', error);
+                setSamplePreviewBlob(null);
+                setSamplePreviewBase64('');
+                setSamplePreviewKey(samplePreviewModel.previewKey);
+                setSamplePreviewStatus('error');
+                setSamplePreviewError(error?.message || 'No se pudo generar el DOCX de ejemplo.');
+            }
+        }, SAMPLE_DOCX_PREVIEW_DEBOUNCE_MS);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [enableTemplateSourceFetch, samplePreviewModel, templateInfo, templateSourceDocx.base64, templateSourceDocx.status]);
+
+    useEffect(() => {
+        if (!samplePreviewBlob || !samplePreviewContainerRef.current || !samplePreviewModel) {
+            return undefined;
+        }
+        let cancelled = false;
+        setSamplePreviewStatus('rendering');
+        renderTemplateSampleDocxPreview(samplePreviewBlob, samplePreviewContainerRef.current, samplePreviewModel)
+            .then(() => {
+                if (!cancelled) {
+                    setSamplePreviewStatus('ready');
+                    setSamplePreviewError('');
+                }
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                logger.error('No se pudo renderizar el DOCX de ejemplo', error);
+                setSamplePreviewStatus('error');
+                setSamplePreviewError(error?.message || 'No se pudo renderizar el DOCX de ejemplo.');
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [samplePreviewBlob, samplePreviewModel]);
+
+    const handleRailPreview = useCallback(async () => {
+        if (!samplePreviewBase64 || !samplePreviewKey) return;
+        setSampleWordPreview({
+            previewKey: samplePreviewKey,
+            pages: [],
+            warnings: [],
+            converterUsed: null,
+            isLoading: true,
+            error: null,
+        });
+        try {
+            const response = await fetch(`${API_BASE}/api/templates/sample-preview/render-word`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    kernel_id: kernelId || 'template-editor',
+                    preview_key: samplePreviewKey,
+                    docx_base64: samplePreviewBase64,
+                    force_refresh: true,
+                }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const detail = payload?.detail?.message || payload?.detail || payload?.message || 'No se pudo generar el preview Word nativo.';
+                throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+            }
+            if (payload.preview_key && payload.preview_key !== samplePreviewKey) {
+                return;
+            }
+            const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+            setSampleWordPreview({
+                previewKey: payload.preview_key || samplePreviewKey,
+                pages: Array.isArray(payload.preview_pages) ? payload.preview_pages : [],
+                warnings,
+                converterUsed: payload.converter_used || null,
+                isLoading: false,
+                error: null,
+            });
+            if (warnings.length && !(payload.preview_pages || []).length) {
+                onStatusMessage?.(warnings.join(' '), 'warning');
+            }
+        } catch (error) {
+            const message = error?.message || 'No se pudo generar el preview Word nativo.';
+            setSampleWordPreview({
+                previewKey: samplePreviewKey,
+                pages: [],
+                warnings: [],
+                converterUsed: null,
+                isLoading: false,
+                error: message,
+            });
+            onStatusMessage?.(message, 'warning');
+        }
+    }, [kernelId, onStatusMessage, samplePreviewBase64, samplePreviewKey]);
+
+    const handleOpenSampleDocx = useCallback(async () => {
+        if (!samplePreviewBase64) return;
+        setIsOpeningSampleDocx(true);
+        try {
+            const response = await fetch(`${API_BASE}/api/templates/sample-preview/open-default`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename: `inspyro-template-preview-${Date.now()}.docx`,
+                    docx_base64: samplePreviewBase64,
+                }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const detail = payload?.detail?.message || payload?.detail || payload?.message || 'No se pudo abrir el DOCX.';
+                throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+            }
+            onStatusMessage?.('DOCX de ejemplo abierto con la app por defecto.', 'success');
+        } catch (error) {
+            onStatusMessage?.(error?.message || 'No se pudo abrir el DOCX de ejemplo.', 'error');
+        } finally {
+            setIsOpeningSampleDocx(false);
+        }
+    }, [onStatusMessage, samplePreviewBase64]);
+
     const templateBindingDisplay = getTemplateBindingDisplay(templateBinding);
     const templateBindingWarning = ['missing', 'error'].includes(String(templateBinding?.status || ''));
+    const effectiveOpeningPersistedTemplate = Boolean(isOpeningPersistedTemplate && !templateBindingWarning);
 
     return (
         <div className="template-editor-overlay" onClick={onClose}>
@@ -2752,7 +3218,10 @@ const TemplateEditor = ({
                     </div>
                 )}
 
-                <div className="template-editor-body">
+                <div
+                    className="template-editor-body"
+                    style={{ '--template-preview-rail-width': `${previewRailWidth}px` }}
+                >
                     {/* Left Sidebar */}
                     <div className="editor-sidebar">
                         {templateInfo ? (
@@ -2984,16 +3453,16 @@ const TemplateEditor = ({
                         ) : (
                             <div className="no-template">
                                 <div className="no-template__copy">
-                                    <strong>{isOpeningPersistedTemplate ? 'Cargando plantilla...' : 'No hay plantilla activa.'}</strong>
+                                    <strong>{effectiveOpeningPersistedTemplate ? 'Cargando plantilla...' : 'No hay plantilla activa.'}</strong>
                                     <span>
-                                        {isOpeningPersistedTemplate
+                                        {effectiveOpeningPersistedTemplate
                                             ? 'Reatachando la plantilla persistida del workspace al kernel activo.'
                                             : 'Sube un archivo .docx o importa una configuracion portable para empezar.'}
                                     </span>
                                 </div>
 
-                                {isUploadingTemplate || isOpeningPersistedTemplate ? (
-                                    <LoadingSpinner message={isOpeningPersistedTemplate ? 'Cargando plantilla...' : 'Extrayendo estilos...'} size="small" />
+                                {isUploadingTemplate || effectiveOpeningPersistedTemplate ? (
+                                    <LoadingSpinner message={effectiveOpeningPersistedTemplate ? 'Cargando plantilla...' : 'Extrayendo estilos...'} size="small" />
                                 ) : (
                                     <div className="no-template__actions">
                                         <button
@@ -3063,9 +3532,9 @@ const TemplateEditor = ({
                                 onUpdate={handleStyleUpdate}
                                 onUpdateDocumentDefaults={handleDocumentDefaultsUpdate}
                                 onRequestPreview={handleRequestPreview}
-                                previewImage={previewImage}
+                                previewImage={null}
                                 isUpdating={isUpdating}
-                                isPreviewLoading={isPreviewLoading}
+                                isPreviewLoading={false}
                                 advancedDetails={selectedStyleDetails}
                                 templateDetails={stylePanelTemplateDetails}
                                 onStatusMessage={onStatusMessage}
@@ -3093,60 +3562,88 @@ const TemplateEditor = ({
                     </div>
 
                     {templateInfo && (
-                        <aside className="template-preview-rail scroll-surface" data-testid="template-preview-rail">
+                        <aside className={`template-preview-rail scroll-surface ${isPreviewRailResizing ? 'resizing' : ''}`} data-testid="template-preview-rail">
+                            <div
+                                className="template-preview-rail-resizer"
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label="Ajustar ancho del preview"
+                                title="Arrastrar para ajustar el ancho del preview"
+                                onPointerDown={handlePreviewRailResizeStart}
+                            />
                             <div className="template-preview-rail-header">
                                 <div>
-                                    <div className="sidebar-section-label">Preview interno</div>
+                                    <div className="sidebar-section-label">Preview DOCX de ejemplo</div>
                                     <h3>{previewRailTitle}</h3>
                                 </div>
-                                <button
-                                    type="button"
-                                    className="reload-button"
-                                    onClick={handleRailPreview}
-                                    disabled={!selectedStylePreviewPayload || isPreviewLoading}
-                                    title="Renderizar con Microsoft Word nativo"
-                                    data-testid="template-native-word-preview"
-                                >
-                                    {isPreviewLoading ? <LoadingSpinner size="small" /> : <IconRefresh />}
-                                    <span>Preview Word nativo</span>
-                                </button>
+                                <div className="preview-header-actions">
+                                    <button
+                                        type="button"
+                                        className="reload-button"
+                                        onClick={handleOpenSampleDocx}
+                                        disabled={!samplePreviewBase64 || isOpeningSampleDocx || samplePreviewStatus === 'building'}
+                                        title="Abrir el DOCX de ejemplo con la app por defecto"
+                                        data-testid="template-open-sample-docx"
+                                    >
+                                        {isOpeningSampleDocx ? <LoadingSpinner size="small" /> : <IconFolderOpen />}
+                                        <span>Abrir DOCX</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="reload-button"
+                                        onClick={handleRailPreview}
+                                        disabled={!samplePreviewBase64 || sampleWordPreview.isLoading || samplePreviewStatus === 'building'}
+                                        title="Renderizar el DOCX de ejemplo con Microsoft Word nativo"
+                                        data-testid="template-native-word-preview"
+                                    >
+                                        {sampleWordPreview.isLoading ? <LoadingSpinner size="small" /> : <IconRefresh />}
+                                        <span>Preview Word nativo</span>
+                                    </button>
+                                </div>
                             </div>
 
-                            {selectedStylePreviewPayload ? (
+                            {samplePreviewModel ? (
                                 <>
                                     <div className="live-preview-container preview-rail-frame">
-                                        {isPreviewLoading && (
+                                        {(samplePreviewStatus === 'building' || samplePreviewStatus === 'rendering' || sampleWordPreview.isLoading || isOpeningSampleDocx) && (
                                             <div className="loading-overlay">
                                                 <div className="loading-overlay-content">
                                                     <div className="spinner"></div>
                                                     <div className="loading-overlay-text">
-                                                        {previewImage ? 'Actualizando preview Word nativo...' : 'Generando preview Word nativo...'}
+                                                        {samplePreviewStatusText}
                                                     </div>
                                                 </div>
                                             </div>
                                         )}
 
-                                        {previewImage ? (
-                                            <img
-                                                src={`data:image/png;base64,${previewImage}`}
-                                                alt="Vista previa de Word"
-                                                className="word-preview-image"
-                                            />
+                                        {isSampleWordPreviewVisible ? (
+                                            <div className="template-word-preview-pages" data-testid="template-word-preview-pages">
+                                                {activeSampleWordPreviewPages.map((page) => (
+                                                    <figure
+                                                        key={page.page_index}
+                                                        className="template-word-preview-page"
+                                                        style={{
+                                                            '--word-page-aspect': page.width && page.height ? `${page.width} / ${page.height}` : '8.5 / 11',
+                                                        }}
+                                                    >
+                                                        <img
+                                                            src={`data:image/png;base64,${page.png_base64}`}
+                                                            alt={`Vista previa Word pagina ${Number(page.page_index) + 1}`}
+                                                            className="word-preview-image"
+                                                        />
+                                                    </figure>
+                                                ))}
+                                            </div>
                                         ) : (
-                                            <TemplateInternalPreview
-                                                styleName={selectedStyleDisplayName}
-                                                font={selectedStyleEffectiveFont}
-                                                paragraph={selectedStyleEffectiveParagraph}
-                                                styleType={selectedStyleTypeForPreview}
-                                                category={selectedStyleCategoryForPreview}
-                                                tableFormat={selectedStyleTableFormat}
+                                            <div
+                                                ref={samplePreviewContainerRef}
+                                                className="template-sample-docx-host"
+                                                data-testid="template-sample-docx-preview"
                                             />
                                         )}
                                     </div>
-                                    <div className={`preview-status-line ${isPreviewLoading ? 'busy' : ''}`} aria-live="polite">
-                                        {isPreviewLoading
-                                            ? 'Renderizando con Word nativo en cola serializada...'
-                                            : (previewImage ? 'Preview Word nativo listo' : 'Preview interno automatico; Word solo se ejecuta por boton.')}
+                                    <div className={`preview-status-line ${samplePreviewStatus === 'building' || samplePreviewStatus === 'rendering' || sampleWordPreview.isLoading ? 'busy' : ''}`} aria-live="polite">
+                                        {samplePreviewStatusText}
                                     </div>
                                 </>
                             ) : (

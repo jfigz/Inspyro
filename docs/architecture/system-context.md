@@ -1,6 +1,6 @@
 ﻿# Contexto del Sistema Inspyro (LLM-First)
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 > **Objetivo:** entregar a agentes IA una vista global mínima y precisa del sistema completo.
 
 ---
@@ -26,7 +26,7 @@
 5. **Procesos externos**
 - `ipykernel` para ejecución real de Python.
 - `pylsp` para autocompletado.
-- Microsoft Word / LibreOffice para DOCX→PDF.
+- Microsoft Word aislado por instancia propia / LibreOffice para DOCX→PDF.
 
 ---
 
@@ -37,15 +37,15 @@
 | Desktop | `desktop/main.js` + `preload.js` | Ventana Electron, splash, menú nativo, single-instance, sidecar backend, preload seguro, persistencia de recents/bounds, máquina de estados del renderer y navegación externa | Lifecycle del shell + backend child process + shell-state local |
 | Frontend | `App.js` | Layout principal, wiring WS/REST, estado global de paneles, bridge desktop-aware, branding visible del header desde los PNG canónicos y variantes contextuales de `assets/brand/`, arbitraje de notificaciones nativas y gobierno del espejo MCP | Estado UI global + sesiones notebook/code por path + template/document state notebook-scoped + integración del shell desktop |
 | Frontend | `NotebookEditor.js` + `notebook/` | Superficie visible del notebook activo, ejecución de celdas, outputs y parseo de mensajes notebook | Estado notebook visible + runtime por celda; lifecycle persistente del kernel delegado al shell |
-| Frontend | `TemplateEditor.js` | Edición de estilos de plantilla, modo Word completo y previews | Estado template del notebook activo; ownership persistente en `App.js` por `path`, latch de attach por token/path y drafts locales hasta ACK |
+| Frontend | `TemplateEditor.js` | Edición de estilos de plantilla, modo Word completo y preview DOCX de ejemplo | Estado template del notebook activo; ownership persistente en `App.js` por `path`, latch de attach por token/path, drafts locales hasta ACK y Blob/base64 de preview generado en frontend |
 | Backend | `main.py` | Dispatcher WS con priorización de control, colas inbound acotadas por conexión y workers por tipo de carga, endpoints REST de salud/sistema y serving same-origin del frontend compilado en modo desktop | Mapa de contratos de entrada + lifecycle de colas/tareas inbound WS por conexión (`/ws` shell global, `/ws/notebook` por notebook) + serving SPA |
 | Backend | `services/websocket_manager.py` | Registro/desregistro de conexiones, sanitización JSON-safe, cola saliente FIFO por conexión, writer task único y política `Protect notebooks` ante saturación del transporte compartido | Conexiones activas + `_ConnectionState` por socket (`queue`, `writer_task`, `closing`) + managers separados para shell global y sockets notebook dedicados |
 | Backend | `routers/notebook.py` + `routers/notebook_*.py` | Fachada + handlers separados de ejecución/control/template | Orquestación de mensajes notebook/template |
 | Backend | `services/jupyter_kernel.py` | Sesiones kernel, serialización de ejecución por lock y callbacks IOPub desacoplados que drenan sobre el transporte WS serializado de `02-websocket-manager` | Estado kernel por `kernel_id` + backlog acotado de callbacks |
 | Backend | `services/lsp_bridge.py` | Proceso `pylsp`, bridge WS<->stdio y forwarding JSON-RPC | Estado efímero por conexión LSP + lifecycle del subprocess |
 | Backend | `services/workspace_service.py` | Workspace activo y raíz de estado interno escribible de la app | Workspace activo + app-state dir |
-| Backend | `services/template/` + `services/template_service.py` | Dominio template modular + fachada de compatibilidad legacy | Estado de plantilla en disco por kernel + cola serial de preview Word nativo |
-| Backend | `services/pdf_converter.py` | Conversión y caché PDF; caché protegido con `threading.Lock`, cola async explícita del camino Word-capable y executors dedicados para no bloquear el pool compartido mientras un notebook espera convertidor | Estado de conversión/caché + cola async del convertidor |
+| Backend | `services/template/` + `services/template_service.py` | Dominio template modular + fachada de compatibilidad legacy | Estado de plantilla en disco por kernel + cache de render Word del DOCX de ejemplo + cola/caches legacy de preview Word nativo |
+| Backend | `services/pdf_converter.py` | Conversión y caché PDF; caché protegido con `threading.Lock`, runner Word aislado por `DispatchEx` + PID propio y cola async explícita del camino Word-capable con executors dedicados para no bloquear el pool compartido mientras un notebook espera convertidor | Estado de conversión/caché + cola async del convertidor + lifecycle del Word automatizado propio |
 | Backend | `services/runtime_metrics.py` | Métricas de saturación/latencia WS, cola saliente compartida por conexión y contención de locks | Estado agregado de observabilidad runtime |
 | Backend | `backend/mcp_server/*` | Adaptador MCP local, discoverability AI-first, bridge REST/WS, resources/prompts y relay de actividad/espejo | Estado MCP session-scoped por `session_id` (bridge, notebooks, artefactos, ejecuciones, roots/perfil) |
 
@@ -81,14 +81,14 @@
 - Owner: `jupyter_kernel_manager` + `app/core/state.py` (locks, cache ejecuciones y preview) + registros en `notebook.py`/`notebook_service.py`/`home_compact.py`.
 - Claves principales: `kernel_id`, `cell_id`, hashes DOCX/PDF, snapshot notebook por `kernel_id`, y runtimes activos notebook/code visibles en Home.
 - `app/core/state.py` también es owner del mapping `kernel_id -> websocket` y del cleanup diferido por desconexión; cualquier request notebook/template/control válida sobre `/ws/notebook` vuelve a enlazar ese `kernel_id` a la conexión actual y evita que el cleanup del socket viejo apague un kernel todavía vivo tras reconnect.
-- El pipeline DOCX/PDF notebook-first ya no deja la espera del convertidor Word-capable escondida dentro del executor compartido: esa contención vive explícitamente en `pdf_converter.py`, se publica por WS como `shared_resource={ kind: "pdf_converter", scope: "global", status: "waiting"|"running" }` y `home_compact.py` la refleja en `GET /api/system/home-summary` mientras el ciclo documental siga abierto.
+- El pipeline DOCX/PDF notebook-first ya no deja la espera del convertidor Word-capable escondida dentro del executor compartido: esa contención vive explícitamente en `pdf_converter.py`, se publica por WS como `shared_resource={ kind: "pdf_converter", scope: "global", status: "waiting"|"running" }` y `home_compact.py` la refleja en `GET /api/system/home-summary` mientras el ciclo documental siga abierto. Cuando el motor es Microsoft Word, `pdf_converter.py` crea una instancia COM aislada, valida que su PID no sea preexistente y solo termina ese PID propio ante timeout.
 
 6. **Estado del transporte WS saliente compartido**
 - Owner: `services/websocket_manager.py` + `services/runtime_metrics.py`.
 - Modelo: cada conexión mantiene una cola saliente FIFO propia y un único writer task autorizado a hacer `websocket.send_text()`. `send_personal_message()`/`broadcast()` significan "payload aceptado por la cola" y no "flush físico ya completado". Desde 2026-04-20 el shell humano separa `/ws` para eventos globales (`workspace_fs_event`, `mcp_*`, control general, `.py`) y `/ws/notebook` para notebook/template/documento con un socket por sesión notebook.
 - Política de protección: si la cola se satura, la conexión se cierra con `1013/outgoing_queue_saturated` para evitar que un notebook o pipeline DOCX/PDF lento deje wedgeado al resto de los productores que comparten la misma sesión humana.
 - En frontend, `useAppWebSocket` replica ese aislamiento también en la retención local: la cola notebook ya no se recorta como buffer plano global, sino por bucket `socket/path`, preservando el orden local y evitando que una ráfaga de notebook A evicte los terminales de notebook B.
-- En frontend, `useWebSocket` del canal global conserva una cola acotada para mensajes críticos de template aceptados durante reconnect (`template_attach`/upload legacy), deduplica por `request_id` o attach key y solo permite marcar estado `pending` cuando `sendMessage()` devuelve aceptación efectiva.
+- En frontend, `App.js` emite `template_attach` del notebook activo por el socket dedicado `/ws/notebook` para que el ACK vuelva por la misma cola que consume el Template Editor; `useWebSocket` del canal global conserva cola acotada y dedupe para compatibilidad/reconnect de mensajes críticos legacy.
 - Implicancia arquitectónica: la independencia real entre notebooks paralelos depende no solo de `kernel_id`/`execution_id`, sino también de aislar correctamente este transporte WS y de rebindear el ownership del kernel al socket notebook vigente; el riesgo residual de contención se acota al recurso Word/PDF global, no al canal de mensajes entre notebooks.
 
 7. **Estado interno de aplicación y workspace**
@@ -103,7 +103,7 @@
 - El binding persistible de plantilla vive en el `.ipynb` bajo `metadata.inspyro.template_binding` y apunta a un JSON portable relativo al directorio del notebook (`<stem>.inspyro-template.json` por defecto). `services/template_binding.py` resuelve rutas seguras, aplica el JSON al kernel al cargar/crear/resetear y mantiene `kernel_id -> binding` para que cada ACK autoritativo de template sobrescriba automáticamente ese JSON. Si el JSON falta o está corrupto, el estado `template_binding.status` viaja como `missing`/`error`, pero el notebook sigue ejecutándose sin plantilla.
 - La extracción conserva estilos ocultos/latentes y metadata `word_style`/`style_visibility`; la UI filtra esos estilos por defecto, pero el estado backend y los payloads no los descartan.
 - La persistencia de plantillas valida DOCX como ZIP antes de devolver estado; ante corrupción, cuarentena el binario, regenera un DOCX mínimo, reextrae JSON compatible y escribe DOCX/JSON con replace atómico y retry para mantener ambos artefactos coherentes.
-- Los previews automáticos del editor usan motor interno frontend; Word nativo queda bajo demanda y pasa por un lock/cola backend compartido entre previews de estilo y tabla, de modo que no compite en paralelo con otras conversiones Word.
+- El preview principal del editor ya no es una miniatura por estilo: el frontend genera un unico DOCX de ejemplo (`docx`), lo renderiza con `docx-preview`, conserva el Blob/base64 por `preview_key` y enfoca la seccion asociada al estilo/slot/tabla activa. `Preview Word nativo` y `Abrir DOCX` consumen ese mismo binario por REST; los contratos WS `template_preview_style`/`template_table_preview` quedan como compatibilidad legacy y siguen serializados para no competir con otras conversiones Word.
 
 9. **Estado de artefactos descargables**
 - Owner: `docx_downloads.py`, `pdf_downloads.py`, `template_tokens.py`.

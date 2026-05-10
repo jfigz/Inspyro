@@ -4,7 +4,7 @@
 
 > **Ubicacion:** `backend/mcp_server/`
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-10
 
 > **Changelog:** `docs/changelog/19-mcp-server.md`
 
@@ -13,6 +13,16 @@
 ## Proposito sistemico
 
 Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Context Protocol). El servidor corre localmente, consume el backend existente via REST + WebSocket y actua como capa adaptadora, no como nueva fuente de verdad funcional.
+
+## Configuración universal para agentes IA (2026-05-09)
+
+- El MCP se presenta como servidor local universal para clientes con capacidades agenticas (Codex, Claude Code/Desktop, Cursor, VS Code o clientes HTTP propios), no como flujo atado a un cliente específico.
+- `GET /api/mcp/status` expone aditivamente `configuration`: endpoint HTTP, host/puerto, perfil por defecto `authoring`, modo recomendado `stateful-http`, comando/cwd/args para `stdio`, URLs reales del backend (`INSPYRO_BACKEND_URL`, `INSPYRO_BACKEND_WS_URL`, `INSPYRO_BACKEND_NOTEBOOK_WS_URL`) y advertencias para usuarios inexpertos.
+- El subprocess shell-owned hereda esas URLs desde el backend real. En desktop empaquetado con puerto dinámico, el MCP ya no asume `:8000`; usa las variables `INSPYRO_BACKEND_*` calculadas por el backend principal al arrancar el servicio.
+- Se agrega el resource `inspyro://guides/client-configuration`, también listado en `inspyro://manifest`, con presets copiables para Codex, Claude Code/Desktop, Cursor, VS Code y HTTP genérico.
+- Los presets publicados por resources MCP usan rutas de workspace neutrales (`C:\Inspyro\Workspace`) y nunca exponen rutas privadas del repositorio local o del usuario que empaqueta el release.
+- El modo seguro por defecto sigue siendo local-only (`INSPYRO_MCP_HOST=127.0.0.1`). Publicar MCP en red pública, OAuth o multiusuario queda fuera de este cambio.
+- Para notebooks se debe usar `stateful-http` o `stdio`; `stateless-http` es útil para pruebas HTTP simples, pero no conserva kernels, sesiones notebook ni artefactos.
 
 ## Binding de template JSON notebook-first (2026-05-08)
 
@@ -166,7 +176,7 @@ Exponer capacidades de Inspyro a modelos de IA externos mediante MCP (Model Cont
 
   - **Operativos:** `inspyro://manifest`, `inspyro://system/info`, `inspyro://system/health`, `inspyro://units/catalog`, `inspyro://pdf/status`, `inspyro://files/tree`, `inspyro://session/notebooks`
 
-  - **Guides AI-first:** `inspyro://guides/start-here`, `inspyro://guides/notebook-workflow`, `inspyro://guides/docx-quickstart`, `inspyro://guides/artifact-lifecycle`, `inspyro://guides/template-workflow`, `inspyro://guides/analysis-units-workflow`, `inspyro://guides/error-recovery`
+  - **Guides AI-first:** `inspyro://guides/start-here`, `inspyro://guides/client-configuration`, `inspyro://guides/notebook-workflow`, `inspyro://guides/docx-quickstart`, `inspyro://guides/artifact-lifecycle`, `inspyro://guides/template-workflow`, `inspyro://guides/analysis-units-workflow`, `inspyro://guides/error-recovery`
 
   - **Ejemplo E2E:** `inspyro://examples/notebook-docx-report`
 

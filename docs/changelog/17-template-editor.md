@@ -1,8 +1,56 @@
 ﻿# Changelog 17 - template-editor
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 
 ---
+
+## 2026-05-09 - Preview DOCX unico del Template Editor
+
+1. `TemplateEditorContainer` reemplaza el rail de preview por un DOCX de ejemplo unico renderizado con `docx-preview@0.3.7`; el documento cubre header/footer, titulos, cuerpo, captions, codigo, listas, tabla con estilo y tabla directa.
+2. El cambio de estilo, slot, categoria, tabla directa o template regenera el Blob y vuelve al preview JS, limpiando paginas Word nativas stale; el foco visual se mueve a la seccion correspondiente del documento completo.
+3. Se agregan `POST /api/templates/sample-preview/render-word` y `POST /api/templates/sample-preview/open-default`. El primero renderiza exactamente ese DOCX con Word nativo y devuelve paginas PNG completas; el segundo guarda el DOCX temporal validado y lo abre con la app por defecto.
+4. `template_preview_style` y `template_table_preview` quedan preservados como compatibilidad legacy, pero el Template Editor deja de usarlos como preview principal del rail.
+5. `TemplateEditorContainer` deja de enviar `template_attach` directamente: entrega `templateToken/requestId` y `App.js` manda el attach por `/ws/notebook`, evitando que el ACK quede en una cola distinta y el boton permanezca en `Subiendo...`.
+6. La cobertura suma unit tests del builder DOCX, flujo REST del rail, render Word con PNG no vacio, Word no disponible no bloqueante, apertura por defecto segura y E2E actualizado para el preview DOCX completo.
+7. El rail queda redimensionable en desktop y el marco del DOCX conserva scroll horizontal real; el foco de seccion ya no auto-desplaza la pagina hacia el centro, evitando el recorte inicial visto en hojas mas anchas que el panel.
+8. El builder del sample crea estilos DOCX `TplPreview_*` desde las propiedades efectivas extraidas del template Word y usa defaults/page setup/list numbering, para que el DOCX abierto y el render JS consuman estilos reales en vez de depender solo de formato inline cuando no existe paquete activo disponible.
+9. El preview JS normal ahora abre el DOCX activo exportado (`GET /api/templates/export`) con `JSZip` y reemplaza solo `word/document.xml`; `styles.xml`, theme, numbering, `sectPr`, headers/footers, relaciones y media quedan intactos, por lo que se ven los estilos reales del Word de plantilla.
+10. `App.js`, `VisualizationPanel` y `DocxViewer` propagan el DOCX de upload como seed opcional, pero el editor vuelve a exportar el paquete activo tras mutaciones para no usar `styles.xml` stale.
+11. El bloque de tabla directa del sample copia la tabla OOXML real del body cuando existe, preservando shading/bordes/anchos/formato directo que no viven necesariamente en el `tblStyle`.
+
+**Archivos:** `frontend/package.json`, `frontend/package-lock.json`, `frontend/src/App.js`, `frontend/src/components/DocxViewer.js`, `frontend/src/components/VisualizationPanel.js`, `frontend/src/components/template-editor/sampleDocxPreview.js`, `frontend/src/components/template-editor/sampleDocxPreview.test.js`, `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/TemplateEditor.css`, `frontend/tests/template-editor.spec.ts`, `frontend/tests/template-editor-bank.spec.ts`, `backend/app/routers/templates.py`, `backend/app/services/template_service.py`, `backend/tests/test_template_sample_preview_api.py`, `docs/architecture/contracts-catalog.md`, `docs/architecture/feature-threads.md`, `docs/architecture/frontend-flow.md`, `docs/architecture/backend-flow.md`, `docs/architecture/system-context.md`, `docs/architecture/synergy-matrix.md`, `docs/architecture/glossary.md`, `docs/llm-index.yaml`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-09 - Corrección de previews del Template Editor
+
+1. `useStylePreviewPipeline` y `TemplateEditorContainer` asocian cada imagen Word nativa al `preview_key` vigente; respuestas stale o cambios de estilo/slot/categoría/template ya no muestran una imagen de otro contexto.
+2. El preview interno automático se completa con propiedades efectivas de párrafo, listas, captions, código y tablas, incluyendo sombreado/bordes de párrafo, celda, alineación vertical, márgenes, width/layout y `tblLook`.
+3. `_convert_pdf_to_png()` recorta el render PDF al contenido no blanco antes de generar PNG, manteniendo la página compacta del preview Word sin estiramiento visual.
+4. `template_logic.process_template_attach()` transforma DOCX corruptos/no-ZIP en `invalid_docx` recuperable y la UI deja de quedar en `Cargando plantilla...` cuando un binding llega en `missing` o `error`.
+5. Se amplía la cobertura frontend/backend/E2E para preview interno por fixture/categoría, `Preview Word nativo` explícito, PNG no vacío y recuperación ante `File is not a zip file`, sin cambiar contratos WS.
+
+**Archivos:** `frontend/src/components/template-editor/TemplateEditorContainer.js`, `frontend/src/components/template-editor/hooks/useStylePreviewPipeline.js`, `frontend/src/components/TemplateEditor.css`, `frontend/src/components/template-editor/TemplateEditorContainer.test.js`, `frontend/src/components/template-editor/previewHooks.test.js`, `frontend/tests/template-editor.spec.ts`, `frontend/tests/template-editor-bank.spec.ts`, `backend/app/services/template_logic.py`, `backend/app/services/template_service.py`, `backend/tests/test_template_editor_bank.py`, `backend/tests/template_editor_bank_utils.py`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-09 - Preview Word nativo sin cerrar sesiones de usuario
+
+1. Los previews Word nativos de estilos y tablas quedan cubiertos por el runner aislado de `pdf_converter.py`, que usa `DispatchEx`, valida PID propio y nunca llama `Quit()` sobre una instancia Word preexistente del usuario.
+2. Si Word no puede aislarse o expira sin PID verificable, el backend responde error/fallback sin matar procesos ajenos y la UI mantiene el preview interno como superficie estable.
+3. No cambian contratos WS de template; el ajuste vive en el conversor compartido.
+
+**Archivos:** `backend/app/services/pdf_converter.py`, `backend/tests/test_pdf_converter_hardening.py`, `backend/tests/test_word_conversion.py`, `docs/modules/17-template-editor.md`, `docs/changelog/17-template-editor.md`
+
+---
+
+## 2026-05-09 - Editor Word/OOXML estructurado
+
+1. Se agrega `backend/app/services/template/word_complete.py` como matriz canónica de capacidades Word/OOXML para identidad, visibilidad, fuente, párrafo, listas, tablas, globales y raw, publicada en el template como `word_capabilities`.
+2. `template_service.py` amplía extracción/aplicación de `word_style`: metadata con aliases/locked/autoRedefine/personales/rsid, párrafo con `pBdr`/`shd`, tabs y flags avanzados, y `docDefaults` con propiedades avanzadas seguras.
+3. `advanced_props` raw ahora se valida antes de escribir (`invalid_advanced_props.*`) para evitar reemplazos OOXML mal formados.
+4. `StyleEditPanel` reorganiza `Word completo` en pestañas tipadas (`Rápido`, `Fuente`, `Párrafo`, `Listas`, `Tabla`, `Identidad`, `Raw OOXML`) y mantiene el JSON como escape hatch, no como flujo principal.
+5. El banco backend y el E2E actualizan la ruta de edición Word-complete para probar controles estructurados, sombreado/bordes de párrafo y rechazo de raw inválido.
 
 ## 2026-05-08 - Banco `template-binding-bank` para binding JSON por notebook
 

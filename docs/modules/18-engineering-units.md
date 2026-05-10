@@ -2,7 +2,7 @@
 
 > **Estado:** ✅ Completado (Fases 1 a 8)
 > **Ubicación:** `backend/librerias_propias/inspyro_units/` + `backend/app/routers/units.py` + `frontend/src/components/notebook/`
-> **Última actualización:** 2026-03-07
+> **Última actualización:** 2026-05-10
 > **Changelog:** `docs/changelog/18-engineering-units.md`
 
 ---
@@ -403,7 +403,7 @@ def test_temperature():
 **Comando de ejecución:**
 
 ```powershell
-cd c:\CalcPyro\P1
+cd C:\Inspyro\Workspace
 .\venv_inspyro\Scripts\activate
 pytest backend/tests/test_inspyro_units.py -v
 ```

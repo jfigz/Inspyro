@@ -36,7 +36,7 @@ def test_extract_ue_text_decodes_quoted_payload_with_backslashes() -> None:
         "data": {
             "text/plain": (
                 "'{\"repr\": \"[\\\\\\'\\\\\\']\", "
-                "\"path\": \"C:\\\\\\\\CalcPyro\\\\\\\\P1\", "
+                "\"path\": \"C:\\\\\\\\Inspyro\\\\\\\\Workspace\", "
                 "\"ok\": true}'"
             )
         },
@@ -45,7 +45,7 @@ def test_extract_ue_text_decodes_quoted_payload_with_backslashes() -> None:
     assert value is not None
     payload = json.loads(value)
     assert payload["repr"] == "['']"
-    assert payload["path"] == "C:\\CalcPyro\\P1"
+    assert payload["path"] == "C:\\Inspyro\\Workspace"
 
 
 @pytest.mark.integration

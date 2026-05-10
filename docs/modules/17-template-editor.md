@@ -2,7 +2,7 @@
 
 > **Estado:** ✅ Producción
 > **Ubicación:** `frontend/src/components/TemplateEditor.js` + `frontend/src/components/template-editor/*` + `backend/app/services/template/` + `backend/app/services/template_service.py`
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 > **Changelog:** `docs/changelog/17-template-editor.md`
 
 ---
@@ -10,6 +10,42 @@
 ## Propósito sistémico
 
 Permitir edición visual de estilos DOCX de plantilla, generación de previews y aplicación de formato directo de tablas, manteniendo sincronía con el kernel y sin bloquear ejecución de celdas.
+
+## Preview DOCX de ejemplo único (2026-05-09)
+
+- El rail principal se renombra a `Preview DOCX de ejemplo` y deja de depender de previews aislados por estilo. El frontend toma el DOCX activo desde `GET /api/templates/export`, abre el paquete con `JSZip` y reemplaza solo `word/document.xml` por un body de muestra con titulos, cuerpo, captions, codigo, listas, tabla con estilo y tabla directa.
+- El preview default renderiza ese mismo Blob DOCX con `docx-preview@0.3.7`, conservando `styles.xml`, `theme`, `numbering.xml`, `sectPr`, relaciones, media, encabezados y pies reales del template. Al cambiar estilo, slot, categoria, tabla directa, defaults o template, se vuelve a exportar el DOCX activo, se regenera el Blob y se enfoca verticalmente la seccion asociada sin ejecutar Word automaticamente ni desplazar horizontalmente la pagina.
+- Cuando el template contiene tablas reales en el body, el bloque de `tabla directa` copia el OOXML de la tabla seleccionada en vez de recrearla; asi se preservan formato directo, shading, bordes, anchos, celdas y cualquier `tblStyle`/override que Word ya mostraba.
+- Si el export del DOCX activo no esta disponible, el editor cae a un sample generado con `docx@9.6.1` y estilos `TplPreview_*`; esa ruta queda como fallback de disponibilidad, no como autoridad visual normal.
+- El rail tiene ancho ajustable en desktop y el marco del documento conserva scroll horizontal visible (`scrollWidth > clientWidth` en la cobertura E2E) para revisar la pagina completa cuando el ancho del preview es menor que la hoja.
+- `Preview Word nativo` queda como accion explicita sobre el mismo DOCX base64 mediante `POST /api/templates/sample-preview/render-word`. Backend devuelve paginas PNG completas (`preview_pages[]`) y warnings no bloqueantes si Word no esta disponible o falla.
+- `Abrir DOCX` llama `POST /api/templates/sample-preview/open-default`: valida que el base64 sea un DOCX ZIP valido, lo guarda en un directorio temporal seguro del estado de la app y lo abre con la aplicacion por defecto del host.
+- Upload/import siguen entregando solo `template_token` al shell: `App.js` conserva el ownership de `template_attach`, pero lo emite por el socket dedicado `/ws/notebook` de la libreta activa para que el ACK vuelva por la misma cola que consume el editor.
+- `template_preview_style` y `template_table_preview` se mantienen para compatibilidad legacy, pero el Template Editor ya no los usa como preview principal del rail.
+
+## Compatibilidad legacy de previews y recuperación de carga (2026-05-09)
+
+- La correccion previa de previews por estilo queda preservada para clientes legacy que aun consumen `template_preview_style`/`template_table_preview`: cada imagen Word nativa se asocia estrictamente al `preview_key` activo y las respuestas stale se descartan.
+- Los errores de Word nativo quedan como warning operativo no bloqueante. En el rail principal actual, la UI conserva el preview DOCX JS usable; en clientes legacy conserva el preview interno.
+- `TemplateInternalPreview` sigue disponible como fallback/compatibilidad y refleja propiedades efectivas reales: fuente, color, tamaño, alineación, espaciados, sangrías, listas, captions, bloques de código, sombreado/bordes de párrafo y formato de tabla/celda (`tblLook`, layout, width, márgenes, sombreado de celda y alineación vertical).
+- Los previews legacy generados desde PDF ya no deben estirarse ni descentrarse; el nuevo render Word del DOCX de ejemplo devuelve páginas PNG completas.
+- El attach/upload de un DOCX corrupto o no-ZIP se convierte en `invalid_docx` recuperable. Si una plantilla vinculada queda en `missing` o `error`, el editor sale de `Cargando plantilla...` y muestra `Seleccionar DOCX` / `Importar JSON` junto al mensaje visible.
+- La cobertura de banco ahora prueba fixtures mínima, completa, localizada y Word-complete sobre previews internos; cuando Word nativo está disponible valida el PNG bajo demanda por botón, sin ejecución automática al seleccionar estilos.
+
+## Preview Word nativo con Word aislado (2026-05-09)
+
+- `Preview Word nativo` y los previews de tabla que pasan por Word consumen el conversor común de `pdf_converter.py`, que crea una instancia Word aislada con `DispatchEx` y valida un PID propio antes de abrir el DOCX temporal.
+- Si Word no puede aislarse porque COM devuelve una instancia existente o no verificable, el backend no cierra Word del usuario; la UI conserva el preview interno/fallback existente.
+- `Word Live` no cambia: sigue usando el Word visible porque es un flujo explícito de edición humana.
+
+## Editor Word/OOXML estructurado (2026-05-09)
+
+- `backend/app/services/template/word_complete.py` define la matriz canónica de capacidades Word/OOXML por familia: identidad, visibilidad, fuente, párrafo, listas, tablas, globales y raw. El payload extraído incluye `word_capabilities` para que UI/tests conozcan qué es `supported`, `readonly`, `raw_only` o `unsupported`.
+- El backend amplía `word_style.metadata` con `aliases`, `locked`, `autoRedefine`, flags personales y `rsid` readonly; `word_style.paragraph` ahora extrae y aplica `pBdr`/`shd` estructurados, además de tabs y flags avanzados ya existentes.
+- `template_update_style` conserva el contrato actual y valida `advanced_props` raw antes de escribir nodos OOXML. Errores de forma se rechazan como `invalid_advanced_props.*` en vez de mutar parcialmente el DOCX.
+- `template_update_document_defaults` acepta `word_defaults` con propiedades avanzadas de fuente/párrafo compartidas con estilos, materializándolas en `docDefaults` reales cuando son seguras.
+- `StyleEditPanel` reemplaza la experiencia principal de JSON por pestañas tipadas: `Rápido`, `Fuente`, `Párrafo`, `Listas`, `Tabla`, `Identidad` y `Raw OOXML`; el JSON experto sigue disponible solo como escape hatch.
+- La cobertura focalizada valida extracción → mutación → reextracción → OOXML real para metadata, fuente CS/East Asia, tabs, sombreado y bordes de párrafo, además de rechazo tipado del raw mal formado.
 
 ## Carga determinística y Word completo práctico (2026-05-08)
 
@@ -184,6 +220,8 @@ Permitir edición visual de estilos DOCX de plantilla, generación de previews y
 - `POST /api/templates/tokenize`
 - `GET /api/templates/export`
 - `POST /api/templates/bind`
+- `POST /api/templates/sample-preview/render-word`
+- `POST /api/templates/sample-preview/open-default`
 
 Contrato canónico: `docs/architecture/contracts-catalog.md`.
 
@@ -200,16 +238,16 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 
 ## Estado compartido y concurrencia
 
-1. Estado frontend: estilo seleccionado, cache de previews, cola de miniaturas, request IDs, latch `lastTemplateAttach` (`pending/attached/error`) y cola local acotada del WS global para mensajes críticos de template aceptados durante reconnect.
-2. Estado backend: template por kernel (`template/storage.py`), modelos `style_coverage` + `style_browser` (`template_extract.py`), sidecar `table_style_runtime_defaults` en `template.json` para defaults runtime de estilos de tabla (`tblLook/tblLayout/tblW`), envelope portable de export (`templates.py`), binding persistible por notebook (`template_binding.py`) y caché de preview por `kernel_id + preview_key` (`template/preview.py`), con compatibilidad mantenida en `template_service.py`. Persistencia por defecto: `INSPYRO_APP_STATE_DIR/templates` para templates por kernel y `INSPYRO_APP_STATE_DIR/template_tokens` para uploads por token; `INSPYRO_TEMPLATE_DIR` e `INSPYRO_TEMPLATE_TOKEN_DIR` permiten override explícito fuera del árbol instalado. En paralelo, la home compacta mantiene el índice legacy `<workspace>/.inspyro/templates/index.json` como fallback/migración, pero el binding del `.ipynb` es la fuente canónica.
+1. Estado frontend: estilo seleccionado, DOCX activo exportado en base64 para preservar el paquete Word real en el preview JS, Blob/base64/`preview_key` del DOCX de ejemplo, paginas Word nativas cacheadas solo para esa clave activa, estado de `Abrir DOCX`, request IDs, latch `lastTemplateAttach` (`pending/attached/error`) y attach one-shot emitido por `App.js` sobre el socket notebook activo para mantener ACK y editor en la misma cola.
+2. Estado backend: template por kernel (`template/storage.py`), modelos `style_coverage` + `style_browser` (`template_extract.py`), sidecar `table_style_runtime_defaults` en `template.json` para defaults runtime de estilos de tabla (`tblLook/tblLayout/tblW`), envelope portable de export (`templates.py`), binding persistible por notebook (`template_binding.py`), cache del render Word del DOCX de ejemplo por `kernel_id + preview_key` y caché legacy de preview por `kernel_id + preview_key` (`template/preview.py`), con compatibilidad mantenida en `template_service.py`. Persistencia por defecto: `INSPYRO_APP_STATE_DIR/templates` para templates por kernel, `INSPYRO_APP_STATE_DIR/template_tokens` para uploads por token y subdirectorio seguro de estado para DOCX de muestra abiertos por defecto; `INSPYRO_TEMPLATE_DIR` e `INSPYRO_TEMPLATE_TOKEN_DIR` permiten override explícito fuera del árbol instalado. En paralelo, la home compacta mantiene el índice legacy `<workspace>/.inspyro/templates/index.json` como fallback/migración, pero el binding del `.ipynb` es la fuente canónica.
 3. `App.js` mantiene `templateInfo` y `templateBlob` como source of truth frontend; si el cambio proviene de MCP, el shell puede actualizarlos directamente desde `template_snapshot` sin esperar un `template_*` del websocket humano.
-4. Adjuntos por token: upload recomendado por REST (`/api/templates/upload`) + attach WS (`template_attach`); `template_upload` permanece como fallback legacy. Upload/import solo generan `template_token`; el estado visible no se considera adjunto hasta ACK `template_uploaded`/`template_info`, y los intentos se deduplican por token/path/request para evitar doble attach después de reconnect. El import portable JSON reutiliza exactamente esa ruta y el export portable sale por `GET /api/templates/export`. Cuando la home necesita reabrir un template persistido por espejo de workspace, resuelve primero el notebook origen, usa `POST /api/templates/tokenize` para convertir ese `.docx` local en `template_token` efímero y nunca trata el mirror `.docx` como archivo editable/binario del shell.
+4. Adjuntos por token: upload recomendado por REST (`/api/templates/upload`) + attach WS (`template_attach`) emitido por `App.js` hacia `/ws/notebook` de la libreta activa; `template_upload` permanece como fallback legacy. Upload/import solo generan `template_token`; el estado visible no se considera adjunto hasta ACK `template_uploaded`/`template_info`, y los intentos se deduplican por token/path/request para evitar doble attach después de reconnect. El import portable JSON reutiliza exactamente esa ruta y el export portable sale por `GET /api/templates/export`. Cuando la home necesita reabrir un template persistido por espejo de workspace, resuelve primero el notebook origen, usa `POST /api/templates/tokenize` para convertir ese `.docx` local en `template_token` efímero y nunca trata el mirror `.docx` como archivo editable/binario del shell.
 5. Concurrencia:
-- Semáforo de previews de estilo.
-- Semáforo de previews de tabla.
-- Lock global de preview Word nativo compartido por estilos y tablas, con timeout de cola para evitar solicitudes Word solapadas.
-- Dispatch background para previews en `/ws`.
-6. El estado latest-wins de previews en backend se poda por kernel y elimina entradas completadas/canceladas para evitar crecimiento no acotado en sesiones largas.
+- Semáforo de previews de estilo legacy.
+- Semáforo de previews de tabla legacy.
+- Lock global de Word/PDF para render nativo del DOCX de ejemplo y previews legacy, con timeout de cola para evitar solicitudes Word solapadas.
+- Dispatch background para previews legacy en `/ws`; el preview principal usa endpoints REST auxiliares.
+6. El estado latest-wins de previews legacy en backend se poda por kernel y elimina entradas completadas/canceladas para evitar crecimiento no acotado en sesiones largas; el cache del DOCX de ejemplo se invalida por `preview_key` y mutaciones de plantilla.
 7. Frontend mantiene borradores locales de edición de estilo hasta recibir `template_style_updated`, `template_document_defaults_updated`, `template_semantic_slots_updated`, `template_style_created` o `template_format_applied` correlados; esos ACKs con `template` completo son autoritativos para rehidratar `templateInfo`, refrescar la selección por `style_id`/slot y limpiar dirty flags sin optimismo.
 8. El fallback a `template_upload` WS queda reservado a fallos de transporte/no disponibilidad del upload REST; errores HTTP funcionales (`400`/`413`/`422`) se muestran en UI sin reenviar el archivo por WS.
 9. Locks de kernel para operaciones que ejecutan código de recarga/template.
@@ -226,7 +264,7 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 20. `Documento (Global)` deja de ser un panel solo lectura: expone controles editables de `Texto global` y `Párrafo global` para materializar `docDefaults` reales de Word sin reescribir estilos explícitos (`Heading 1`, `Caption`, `Code`, etc.).
 21. El contrato dedicado `template_update_document_defaults` escribe `w:docDefaults/w:rPrDefault/w:rPr` y `w:docDefaults/w:pPrDefault/w:pPr` en `styles.xml`, reextrae el template y responde `template_document_defaults_updated` con el `template` completo ya recompuesto.
 22. `template.json` persiste un bloque top-level canónico `document_defaults` con `font`, `paragraph`, `font_source` y `paragraph_source`, alineando editor, runtime DOCX y payloads WS sin depender de hints inferidos desde `document.xml`.
-23. La sección `Documento (Global)` no solicita preview Word dedicada en esta versión: la validación visual esperada es el DOCX/PDF generado con la plantilla materializada, porque ahí es donde Word realmente consume `docDefaults`.
+23. La sección `Documento (Global)` no solicita preview Word dedicada por estilo: la validación visual inmediata ocurre dentro del DOCX de ejemplo completo, y la validación final esperada sigue siendo el DOCX/PDF generado con la plantilla materializada, porque ahí es donde Word realmente consume `docDefaults`.
 24. Las superficies scrollables del editor se reducen a zonas de ownership claro (`template-sidebar-panel`, `editor-main`, `template-preview-rail`) y adoptan `scroll-surface`, evitando scrolls anidados entre sidebar, listas internas y footer.
 25. Después de cualquier reextracción por update de estilo o defaults globales, backend conserva `semantic_style_slots` por `style_id` para que plantillas Word localizadas no pierdan slots como `Textoindependiente` o `Ttulo1`.
 26. El modo `Word completo` serializa propiedades avanzadas sin romper el modo rápido: `word_style.metadata`, `word_style.visibility`, `word_style.font/run`, `word_style.paragraph`, `word_style.list`, `word_style.table` y `word_style.raw/advanced_props` son opcionales y conviven con claves planas legacy.
@@ -246,8 +284,8 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 7. Contrato WS permanece estable para frontend (`template_preview_ready/error`, `template_table_preview_ready/error`, `template_format_applied`, `template_error`).
 8. Pipeline de preview en frontend opera con invalidación centralizada y aceptación estricta de respuestas activas (`request_id`/`preview_key` en vuelo), incluyendo cacheo únicamente de respuestas activas para evitar contaminación stale post-apply.
 9. El `preview_key` de estilos de tabla incorpora firma estructural (`table_signature`) para invalidar preview cuando cambian `tblPr/tblStylePr` aunque font/párrafo no cambien.
-10. Preview Word nativo manual (`Preview Word nativo`) opera en modo `force_refresh`, bypass de caché frontend/backend y request nueva garantizada.
-11. UX de preview comunica estado de pipeline (encolado/renderizando/actualizando) y mantiene preview interno automático como superficie estable mientras llega o falla el render Word nativo.
+10. Preview Word nativo manual (`Preview Word nativo`) opera sobre el DOCX de ejemplo con `force_refresh`, bypass de caché frontend/backend y request nueva garantizada.
+11. UX de preview comunica estado de pipeline (generando DOCX JS/renderizando Word/actualizando) y mantiene el preview DOCX JS como superficie estable mientras llega o falla el render Word nativo.
 12. `delete_template` sanitiza `kernel_id` antes de construir rutas en disco, cerrando path traversal en borrado de template.
 13. `template_upload` valida `docx_base64` con decode estricto (`validate=True`) y responde error tipado (`invalid_docx_base64`) cuando el payload es inválido.
 14. Mutaciones de template críticas (`upload/update/delete/create/apply`) usan lock por kernel con timeout y correlación por `request_id` en respuestas success/error.
@@ -263,24 +301,25 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 24. El preview y la generación notebook comparten la misma semántica runtime de tabla: `look/layout/width` se aplican como propiedades de instancia, no como OOXML inválido del estilo.
 25. Antes de reutilizar o persistir una plantilla, el backend repara declaraciones `xmlns:*` faltantes en cualquier parte OOXML (`styles.xml`, headers, footers, etc.) cuando `mc:Ignorable` referencia prefixes no declarados; esto evita falsos “archivo corrupto” de Word tras mutaciones XML previas.
 26. `StyleEditPanel` mantiene el borrador local hasta que llega el ack correlado (`template_style_updated` o `template_document_defaults_updated`); si llega `template_error`, la UI conserva el estado “Sin guardar”.
-27. Los hooks de preview cancelan trabajo activo en timeout, unmount, reset y cambio de pestaña mediante `template_preview_cancel`, incluyendo previews de tabla correladas por `request_id`.
+27. Los hooks de preview legacy cancelan trabajo activo en timeout, unmount, reset y cambio de pestaña mediante `template_preview_cancel`, incluyendo previews de tabla correladas por `request_id`.
 28. La cola de previews de tabla permite reintento explícito tras error/timeout sin recargar la plantilla; el flag interno de “ya solicitada” se limpia en ramas fallidas.
 29. Si el template no define estilos paragraph requeridos por la API DOCX, la sesión del kernel inyecta fallbacks seguros y, para listas rotas o sin `numPr`, `builder.list()` degrada a marcadores visibles explícitos en vez de dejar contenido plano/invisible.
 30. El panel de estilos ya no “pierde” fuentes fuera de una lista cerrada: el campo `Familia` acepta cualquier nombre de fuente y ofrece sugerencias provenientes del template, del host y de una base Office/Windows compartida.
 31. Al abrir el picker de fuentes, la lista ya no queda reducida al prefijo de la familia actual; esto evita el falso “solo veo variantes de Calibri”.
 32. Una edición explícita de `font_name` ya no compite con `asciiTheme`/`hAnsiTheme`/`csTheme`/`eastAsiaTheme`: `styles.xml` conserva una sola resolución tipográfica efectiva para Word, preview y export final.
 33. Los defaults globales del documento se escriben/remueven a nivel `docDefaults`; limpiar un campo en `Documento (Global)` vuelve a activar la herencia nativa de Word/theme en lugar de dejar un override vacío persistido.
-34. El editor no inicia Word al cargar un `.docx`; el preview interno automático cubre la primera vista, y la ruta Word nativa queda serializada detrás del botón `Preview Word nativo`.
-35. `template_attach` no se marca como aplicado hasta recibir ACK; si el WS global está cerrado, el mensaje crítico se cola con límite y dedupe, y si el envío no se acepta la UI sale de `pending` con error explícito.
+34. El editor no inicia Word al cargar un `.docx`; el preview DOCX de ejemplo generado en frontend cubre la primera vista, y la ruta Word nativa queda detrás del botón `Preview Word nativo`.
+35. `template_attach` no se marca como aplicado hasta recibir ACK; si el socket notebook activo no acepta el envío, la UI sale de `pending` con error explícito y evita quedarse en `Subiendo...` indefinido.
 36. Después de upload/import REST no hay doble attach: `template_token` es un insumo de attach one-shot y el latch por token/path evita reenvíos equivalentes tras remount o reconnect.
 37. `template_style_created` y `template_format_applied` pueden rehidratar `templateInfo` con el `template` autoritativo incluido en el ACK, manteniendo selección/drafts alineados sin polling extra.
 38. Si un DOCX persistido se cuarentena por ZIP inválido, el backend reextrae metadata del DOCX regenerado antes de devolver/persistir JSON y preserva slots solo cuando siguen apuntando a estilos existentes.
 39. Las mutaciones OOXML de parts DOCX se escriben por ZIP temporal validado y replace atómico con retry, reduciendo el riesgo de archivos parcialmente reempaquetados en Windows.
+40. El preview DOCX JS normal preserva el paquete de la plantilla activa (`styles.xml`, headers/footers, media, numbering y `sectPr`) y solo sustituye el body de ejemplo; por eso los estilos que se ven en el editor corresponden al mismo DOCX que usara Word/notebook.
 
 ## Fallos frecuentes y observabilidad
 
 ### Fallos frecuentes
-- Preview Word nativo timeout por conversión pesada, cola ocupada o entorno Word degradado; la UI debe conservar el preview interno automático.
+- Preview Word nativo timeout por conversión pesada, cola ocupada o entorno Word degradado; la UI debe conservar el preview DOCX JS automático.
 - Estado stale tras aplicar formato si no se invalida cache.
 - Contención con ejecución notebook en kernels compartidos.
 - `table_index` inválido (string/negativo/fuera de rango), ahora con rechazo explícito y mensaje trazable.
@@ -298,6 +337,7 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 - `frontend/src/components/template-editor/TemplateEditorContainer.js`
 - `frontend/src/components/template-editor/StyleEditPanel.js`
 - `frontend/src/components/template-editor/fontUtils.js`
+- `frontend/src/components/template-editor/sampleDocxPreview.js`
 - `frontend/src/components/template-editor/TableDirectFormatPanel.js`
 - `frontend/src/components/template-editor/hooks/useStylePreviewPipeline.js`
 - `frontend/src/components/template-editor/hooks/useTablePreviewQueue.js`
@@ -310,6 +350,7 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 - `backend/app/services/template/mutation.py`
 - `backend/app/services/template/preview.py`
 - `backend/app/services/template/table_format.py`
+- `backend/app/services/template/word_complete.py`
 - `backend/app/services/template/xml_ops.py`
 - `backend/app/services/template_extract.py`
 - `backend/app/services/template_binding.py`
@@ -317,6 +358,7 @@ Contrato canónico: `docs/architecture/contracts-catalog.md`.
 - `backend/app/routers/notebook_template.py`
 - `backend/tests/template_editor_bank_utils.py`
 - `backend/tests/test_template_editor_bank.py`
+- `backend/tests/test_template_sample_preview_api.py`
 - `backend/tests/test_template_binding.py`
 - `frontend/tests/template-editor-bank.spec.ts`
 - `frontend/tests/template-binding-bank.spec.ts`

@@ -628,6 +628,7 @@ function Run-McpSmoke {
     $requiredResources = @(
         "inspyro://manifest",
         "inspyro://guides/start-here",
+        "inspyro://guides/client-configuration",
         "inspyro://guides/notebook-workflow",
         "inspyro://guides/docx-quickstart",
         "inspyro://guides/artifact-lifecycle",
@@ -866,7 +867,17 @@ function Run-McpSmoke {
         throw "MCP profile files no deberia seguir exponiendo notebook_sync_cells."
     }
 
-    $healthMessage = (Invoke-McpRequest -Uri $mcpUrl -Headers $requestHeaders -Payload @{ jsonrpc = "2.0"; id = 9; method = "tools/call"; params = @{ name = "get_health"; arguments = @{} } } -TimeoutSec 15).Message
+    $restoreAuthoringMessage = (Invoke-McpRequest -Uri $mcpUrl -Headers $requestHeaders -Payload @{
+        jsonrpc = "2.0"
+        id = 17
+        method = "tools/call"
+        params = @{ name = "set_component_profile"; arguments = @{ profile = "authoring" } }
+    } -TimeoutSec 15).Message
+    if ([string]$restoreAuthoringMessage.result.structuredContent.status -ne "ok") {
+        throw "MCP set_component_profile('authoring') no pudo restaurarse tras validar files."
+    }
+
+    $healthMessage = (Invoke-McpRequest -Uri $mcpUrl -Headers $requestHeaders -Payload @{ jsonrpc = "2.0"; id = 18; method = "tools/call"; params = @{ name = "get_health"; arguments = @{} } } -TimeoutSec 15).Message
     $toolHealth = $healthMessage.result.structuredContent.status
     if ($toolHealth -ne "healthy") {
         throw ("MCP get_health returned unexpected status: {0}" -f $toolHealth)

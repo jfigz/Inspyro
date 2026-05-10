@@ -1,6 +1,6 @@
 ﻿# Matriz de Sinergias (Módulo↔Módulo)
 
-> **Última actualización:** 2026-05-08
+> **Última actualización:** 2026-05-09
 
 > **Objetivo:** exponer dependencias cruzadas e impacto de cambios para agentes IA.
 
@@ -18,7 +18,7 @@
 
 | `09-jupyter-kernel` | `jupyter_client`, `ipykernel`, `02-websocket-manager` | `04-notebook-handlers`, `06-dependency-analyzer`, `07-sensitivity-analyzer` | Contención de canales ZMQ y backlog de callbacks IOPub si no se acota + falsos `iopub_error` si lecturas benignas `Empty` se tratan como fallo duro del canal + acople residual si la ultima celda diferida vuelve a pedir `capture_docx` y espera `__INSP_NOTEBOOK_DOCX` en el reply terminal + wedge aparente si los callbacks IOPub dejan de drenar a través del writer FIFO de `02` y vuelven a competir por el `/ws` compartido |
 
-| `17-template-editor` | `04-notebook-handlers`, `01-document-generation-docx` | `11-notebook-editor-ui`, `14-main-app` | Coherencia de preview (cache FE/BE), ownership dividido (`template_extract`/`template_preview`), correlación `request_id`, save ack-driven con ACKs de `template` autoritativos, adjunto por `template_attach`, fallback REST→WS estricto, cancelación stale (`template_preview_cancel`), deriva tipográfica compartida (`resolved_font`/`font_source`/`system_font_catalog`/`document_defaults`), convivencia `style_coverage` + `style_browser`, slots persistidos `semantic_style_slots` como contrato runtime Word-first, preservación de `style_id` localizados tras reextracción (`Textoindependiente`, `Ttulo1`), selección estable ante nombres duplicados (`selection_key`), distinción entre tabla de muestra estilo-derivada y formato directo para no vaciar estilos destino, round-trip portable (`/api/templates/export` + `semantic_style_slots`, con `category_overrides` solo legacy) sin drift entre export/import, binding JSON notebook-first (`metadata.inspyro.template_binding` + `<notebook>.inspyro-template.json`) como fuente canónica persistible frente al mirror DOCX legacy, cobertura `template-binding-bank` para UI/Home/MCP/degradación segura, y cobertura del banco exhaustivo para que una mutación de template se valide hasta el DOCX generado + Workbench/render visual |
+| `17-template-editor` | `04-notebook-handlers`, `01-document-generation-docx` | `11-notebook-editor-ui`, `14-main-app` | Coherencia de preview (DOCX de ejemplo JS, `docx-preview`, paginas Word nativas y `Abrir DOCX` deben compartir el mismo Blob/base64 + `preview_key`), ownership dividido (`template_extract`/`template_preview`), correlación `request_id`, save ack-driven con ACKs de `template` autoritativos, adjunto por `template_attach`, fallback REST→WS estricto, contratos WS de preview preservados solo como compatibilidad legacy, deriva tipográfica compartida (`resolved_font`/`font_source`/`system_font_catalog`/`document_defaults`), convivencia `style_coverage` + `style_browser`, matriz `word_capabilities`, slots persistidos `semantic_style_slots` como contrato runtime Word-first, preservación de `style_id` localizados tras reextracción (`Textoindependiente`, `Ttulo1`), selección estable ante nombres duplicados (`selection_key`), edición Word/OOXML estructurada alineada con raw validado para no corromper `styles.xml`, distinción entre tabla de muestra estilo-derivada y formato directo para no vaciar estilos destino, round-trip portable (`/api/templates/export` + `semantic_style_slots`, con `category_overrides` solo legacy) sin drift entre export/import, binding JSON notebook-first (`metadata.inspyro.template_binding` + `<notebook>.inspyro-template.json`) como fuente canónica persistible frente al mirror DOCX legacy, cobertura `template-binding-bank` para UI/Home/MCP/degradación segura, y cobertura del banco exhaustivo para que una mutación de template se valide hasta el DOCX generado + Workbench/render visual |
 
 | `01-document-generation-docx` | `docx_builder`, `pdf_converter` | `04-notebook-handlers`, `17-template-editor` | Fallos de conversión Word/LibreOffice + drift entre artifact store DOCX persistente, fallback runtime por `kernel_id` y descarga legacy por token + pérdida total de imágenes si el rebuild OOXML no rehidrata relaciones/media + documento final vacío si el runtime de plantilla no limpia body preservando `sectPr`/headers/footers o si los wrappers `math_to_docx` vuelven a operar en el namespace del módulo en vez del notebook + regresión a `Calibri/Consolas` si el kernel no reusa `builder_required_style_defaults` o si `docDefaults` globales no quedan materializados en `styles.xml` + captions `SEQ/REF` mal anclados si el bookmark no envuelve el número efectivo + clasificación tardía o ausente de DOCX vacíos que contamine historial/latest + hyperlinks de procedencia no aplicados o manifiestos `provenance_id -> artifact_id` fuera de sync + fuga de hyperlinks automáticos de procedencia o field codes `HYPERLINK` hacia cualquier salida Word-visible (`doc_export`, token, `/api/docx/download`) si la sanitización de entrega diverge del artifact interno raw + head-of-line blocking entre notebooks paralelos si `notebook_docx_update` / `notebook_pdf_ready` vuelven a inflar el WS con base64 inline pese a existir `docx_ref` / `pdf_ref` estable + contención invisible del convertidor PDF si la espera del camino Word-capable vuelve a ocurrir dentro del executor compartido en vez de la cola async dedicada + drift entre `builder.document` proxy rastreado y `builder.document_raw` si el escape hatch se usa fuera de casos excepcionales + Workbench DOCX incoherente si `docx_core`, `docx_quality`, `docx_render_cache`, variants/resources y endpoints `/api/docx/workbench/*` dejan de compartir `artifact_id + binary_hash` como identidad + reconversiones innecesarias si `render_page` no reusa el PDF canónico por `binary_hash + renderer_signature + profile` |
 
@@ -41,6 +41,24 @@
 | `19-mcp-server` | `04-notebook-handlers`, `03-file-system-api`, `01-document-generation-docx`, `06-dependency-analyzer`, `07-sensitivity-analyzer`, `17-template-editor`, `18-engineering-units` | clientes MCP externos (Claude, GPT, Gemini, etc.) + `14-main-app`/`15-notification-center` via relay de actividad y espejo | drift de contratos REST/WS + correlación rota por `request_id`/`execution_id` + timeout MCP no propagado al backend o desalineado del presupuesto notebook-first de `600s` + regresión del scoping por `session_id` + artifacts link-first inconsistentes + `file_mutation` incompleto + `notebook_load`/hard reset reenviando outputs embebidos gigantes al kernel o manteniendo timeouts fijos inadecuados en notebooks grandes + relay tardío MCP incompleto si pierde `notebook_docx_update` antes de `notebook_pdf_ready` + batches que cierran antes de que el `execution_id` público ya tenga su DOCX final visible, abriendo carreras con rerenders de template o mutaciones posteriores + roots MCP incompatibles con el workspace activo o colgados por hosts que no responden `list_roots()` + onboarding roto si `mcp.instructions`, resources/templates/prompts o `completion/complete` pierden sincronía + fuga de bucket si una tool notebook deja de capturar `session_id` al inicio y resuelve bridge/locks/background tasks tarde |
 
 | `24-desktop-shell` | `14-main-app`, `08-lsp-bridge`, `19-mcp-server` | `14-main-app`, `03-file-system-api`, `04-notebook-handlers`, `08-lsp-bridge`, `19-mcp-server` | drift entre dev server y same-origin desktop + runtime Python portable faltante o sin dependencias críticas (`pylsp`, `fastmcp`, `mcp`) + backend staged contaminado con estado local/caches/probes + instalador NSIS sin metadata/asociaciones nativas + backend sidecar huérfano + serving SPA roto si `frontend/build` no existe + navegación externa sin aislamiento en Electron + archivos asociados abiertos fuera del workspace correcto + splash bloqueada si no llega `renderer_bootstrap_ready` + ventana negra si el renderer falla antes de `renderer_app_ready` sin fallback visible + recents/bounds stale si el shell-state no se sincroniza + shortcuts duplicados entre menú nativo y listeners web + branding shell/splash/header fuera de sync si la narrativa visible `Agents`/brand mark diverge entre Electron, React y assets empaquetados |
+
+---
+
+## Actualización 2026-05-09 - Configuración universal MCP
+
+1. `19-mcp-server` agrega `inspyro://guides/client-configuration` y expone presets universales en el manifest para que cualquier cliente agentico pueda conectarse sin depender de conocimiento de Codex.
+2. `backend/app/routers/mcp_manager.py` convierte `GET /api/mcp/status.configuration` en fuente de verdad para endpoint HTTP, perfil `authoring`, modo `stateful-http`, preset `stdio` y URLs `INSPYRO_BACKEND_*` heredadas del backend real.
+3. `14-main-app` consume esa configuración en `McpPanel` y renderiza snippets copiables para Codex, Claude Code/Desktop, VS Code, Cursor y HTTP genérico, manteniendo claro que `stdio` lanza un proceso propio y que el botón UI solo controla el servicio HTTP local.
+4. El riesgo cruzado principal es volver a hardcodear `:8000` o recomendar `stateless-http` para notebooks; desktop empaquetado puede usar puerto backend dinámico y los kernels requieren sesión persistente.
+
+---
+
+## Actualización 2026-05-09 - Editor Word/OOXML estructurado
+
+1. `17-template-editor` mueve el modo `Word completo` desde JSON como experiencia principal hacia controles tipados por familia, manteniendo `Raw OOXML` como escape hatch.
+2. `backend/app/services/template/word_complete.py` concentra la matriz de capacidades Word/OOXML y se publica como `word_capabilities` en el template extraído.
+3. `template_service.py` amplía el roundtrip de metadata, `pBdr`, `shd`, `tabs`, fuente avanzada y `docDefaults`, con validación de `advanced_props` antes de escribir el DOCX.
+4. El riesgo cruzado principal pasa a ser mantener alineadas matriz, UI, persistencia OOXML y banco backend/E2E cada vez que un campo cambie de `readonly/raw_only` a `supported`.
 
 ---
 
@@ -176,15 +194,17 @@
 
 1. Revisar `17-template-editor` + `04-notebook-handlers`.
 
-2. Validar consistencia entre `preview_key` (incluida firma de tabla) y cache backend por `kernel_id`.
+2. Validar que el DOCX de ejemplo generado en frontend, el render `docx-preview`, el render Word nativo y `Abrir DOCX` consuman exactamente el mismo Blob/base64 y el mismo `preview_key`.
 
-3. Confirmar trazabilidad de refresh manual con `force_refresh=true` y señalización visual de estado (fallback CSS temporal vs render Word real).
+3. Confirmar que `Preview Word nativo` sea una accion explicita via `POST /api/templates/sample-preview/render-word`, con `force_refresh=true` cuando corresponda, paginas PNG completas y warnings no bloqueantes si Word/PDF falla.
 
-4. Confirmar ruta recomendada REST upload (`/api/templates/upload`) + attach WS (`template_attach`) con fallback legacy `template_upload` solo ante fallo de transporte/no disponibilidad; validar también el export portable (`GET /api/templates/export`) y que la importación JSON reutilice upload + attach.
+4. Confirmar que `Abrir DOCX` use `POST /api/templates/sample-preview/open-default` sobre el mismo DOCX validado como ZIP y que no reconstituya otra muestra divergente.
 
-5. Verificar que `style_coverage` siga siendo el resumen requerido mientras `style_browser` gobierna la navegación detectada, el auto-selected por categoría y los overrides manuales.
+5. Confirmar ruta recomendada REST upload (`/api/templates/upload`) + attach WS (`template_attach`) con fallback legacy `template_upload` solo ante fallo de transporte/no disponibilidad; validar tambien el export portable (`GET /api/templates/export`) y que la importacion JSON reutilice upload + attach.
 
-6. Verificar cleanup de previews activas en timeout/unmount/cambio de pestaña, pruning del registro latest-wins por kernel y estabilidad de `selection_key` cuando existen nombres de estilo duplicados.
+6. Verificar que `style_coverage` siga siendo el resumen requerido mientras `style_browser` gobierna la navegacion detectada, el auto-selected por categoria, la seccion activa del preview DOCX y los overrides manuales.
+
+7. Para clientes legacy, verificar cleanup de previews WS activas en timeout/unmount/cambio de pestana, pruning del registro latest-wins por kernel y estabilidad de `selection_key` cuando existen nombres de estilo duplicados.
 
 ### 5. Refactor estructural de módulos backend
 

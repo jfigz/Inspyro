@@ -85,6 +85,27 @@ describe('template preview hooks', () => {
     }));
   });
 
+  it('associates cached style previews with their preview key', () => {
+    const sendMessage = jest.fn();
+    const { result } = renderHook(() => useStylePreviewPipeline({
+      sendMessage,
+      kernelId: 'kernel-preview',
+      normalizePreviewProps: (props) => props,
+      buildPreviewKey: (styleName, props) => `${styleName}:${props.version}`,
+    }));
+
+    act(() => {
+      result.current.cachePreview('Normal:1', 'cached-image');
+      result.current.handleRequestPreview('Normal', { version: 1 }, { immediate: true });
+    });
+
+    expect(result.current.previewImage).toBe('cached-image');
+    expect(result.current.previewImageKey).toBe('Normal:1');
+    expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'template_preview_style',
+    }));
+  });
+
   it('cancels in-flight table previews when leaving direct mode', async () => {
     const sendMessage = jest.fn();
     const onStatusMessage = jest.fn();

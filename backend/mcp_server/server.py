@@ -50,6 +50,7 @@ _server_kwargs = {
         "grafos de dependencias, unidades de ingenieria y editor de templates. "
         "El perfil MCP por defecto es `authoring`: prioriza notebook, documentos, templates y unidades. "
         "Lee `inspyro://manifest` para descubrir perfiles, templates de resources y rutas recomendadas. "
+        "Si estas configurando un cliente MCP, lee `inspyro://guides/client-configuration`. "
         "Antes de usar cualquier tool que cambie estado, lee primero el resource "
         "`inspyro://guides/start-here` y luego el guide especifico de la tarea. "
         "Los guides MCP exponen todo lo necesario para operar sin acceso al repositorio. "

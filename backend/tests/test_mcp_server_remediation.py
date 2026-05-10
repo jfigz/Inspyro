@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from app.routers import analysis as analysis_router, notebook_execution, notebook_kernel_control
+from app.routers import analysis as analysis_router, mcp_manager, notebook_execution, notebook_kernel_control
 from app.services import notebook_service
 from mcp_server import config as mcp_config, server as mcp_server_main, start_mcp
 from mcp_server.bridge import BridgeError, InspyroBridge
@@ -182,6 +182,54 @@ def _clear_mcp_state():
     InspyroBridge._instance = None
     InspyroBridge._instances = {}
     mcp_config.set_runtime_transport(transport="streamable-http", stateless_http=False)
+
+
+def test_mcp_status_snapshot_exposes_universal_client_configuration(monkeypatch):
+    for name in (
+        "INSPYRO_BACKEND_URL",
+        "INSPYRO_BACKEND_WS_URL",
+        "INSPYRO_BACKEND_NOTEBOOK_WS_URL",
+        "INSPYRO_BACKEND_HOST",
+        "PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("INSPYRO_BACKEND_PORT", "18042")
+    monkeypatch.setenv("INSPYRO_MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("INSPYRO_MCP_PORT", "18100")
+
+    snapshot = mcp_manager.get_mcp_server_snapshot()
+    configuration = snapshot["configuration"]
+
+    assert configuration["http_endpoint"] == "http://127.0.0.1:18100/mcp"
+    assert configuration["default_profile"] == "authoring"
+    assert configuration["recommended_mode"] == "stateful-http"
+    assert configuration["local_only"] is True
+    assert configuration["backend"]["url"] == "http://127.0.0.1:18042"
+    assert configuration["backend"]["ws_url"] == "ws://127.0.0.1:18042/ws"
+    assert configuration["backend"]["notebook_ws_url"] == "ws://127.0.0.1:18042/ws/notebook"
+    assert configuration["stdio"]["args"] == ["-m", "mcp_server", "--stdio"]
+    assert "stateless-http" in " ".join(configuration["warnings"])
+
+
+def test_mcp_subprocess_env_inherits_dynamic_backend_urls(monkeypatch):
+    for name in (
+        "INSPYRO_BACKEND_URL",
+        "INSPYRO_BACKEND_WS_URL",
+        "INSPYRO_BACKEND_NOTEBOOK_WS_URL",
+        "INSPYRO_BACKEND_HOST",
+        "PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("INSPYRO_BACKEND_PORT", "19001")
+    monkeypatch.setenv("INSPYRO_MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("INSPYRO_MCP_PORT", "19100")
+
+    env = mcp_manager._mcp_subprocess_env()
+
+    assert env["INSPYRO_BACKEND_URL"] == "http://127.0.0.1:19001"
+    assert env["INSPYRO_BACKEND_WS_URL"] == "ws://127.0.0.1:19001/ws"
+    assert env["INSPYRO_BACKEND_NOTEBOOK_WS_URL"] == "ws://127.0.0.1:19001/ws/notebook"
+    assert env["INSPYRO_MCP_PORT"] == "19100"
 
 
 def test_session_state_tracks_notebooks_and_artifacts():

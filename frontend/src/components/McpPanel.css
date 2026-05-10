@@ -21,7 +21,7 @@
 }
 
 .mcp-panel {
-    width: min(520px, calc(100vw - 32px));
+    width: min(760px, calc(100vw - 32px));
     max-height: calc(100vh - 76px);
     background:
         linear-gradient(180deg, rgba(28, 33, 40, 0.96) 0%, rgba(22, 27, 34, 0.98) 100%);
@@ -215,7 +215,7 @@
     overflow-x: hidden;
     flex: 1;
     min-height: 220px;
-    max-height: 420px;
+    max-height: min(620px, calc(100vh - 220px));
 }
 
 .mcp-info-grid,
@@ -507,8 +507,114 @@
     margin-top: 12px;
     padding: 10px 12px;
     background: rgba(255, 255, 255, 0.025);
-    border-radius: 10px;
+    border-radius: 8px;
     color: var(--color-text-tertiary);
     font-size: 11px;
     line-height: 1.5;
+}
+
+.mcp-config-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.mcp-config-status-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.mcp-config-status-card strong,
+.mcp-preset-header strong {
+    display: block;
+    color: var(--color-text-primary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.mcp-config-status-card span:not(.mcp-panel-dot),
+.mcp-preset-header span {
+    display: block;
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.mcp-config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mcp-config-section-title {
+    color: #8ea1c8;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.mcp-preset-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.mcp-preset-card {
+    min-width: 0;
+    border: 1px solid var(--color-border-default);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+    overflow: hidden;
+}
+
+.mcp-preset-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.mcp-copy-btn {
+    flex: 0 0 auto;
+    border: 1px solid rgba(88, 166, 255, 0.35);
+    border-radius: 8px;
+    background: rgba(88, 166, 255, 0.08);
+    color: var(--color-accent-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 5px 8px;
+}
+
+.mcp-copy-btn:hover {
+    background: rgba(88, 166, 255, 0.14);
+}
+
+.mcp-config-snippet {
+    margin: 0;
+    padding: 10px;
+    max-height: 190px;
+    overflow: auto;
+    background: rgba(13, 17, 23, 0.72);
+    color: var(--color-text-secondary);
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+    .mcp-config-summary,
+    .mcp-preset-list {
+        grid-template-columns: 1fr;
+    }
 }

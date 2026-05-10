@@ -608,11 +608,13 @@ async def test_mcp_ai_first_catalog_exposes_guides_and_prompts(fake_bridge: Fake
         resource_template_uris = {str(resource.uriTemplate) for resource in resource_templates}
 
         assert "inspyro://guides/start-here" in instructions
-        assert len(resources) == 15
+        assert "inspyro://guides/client-configuration" in instructions
+        assert len(resources) == 16
         assert len(prompts) == 7
         assert len(resource_templates) == 7
         assert tool_names == EXPECTED_AUTHORING_TOOLS
         assert "inspyro://guides/start-here" in resource_uris
+        assert "inspyro://guides/client-configuration" in resource_uris
         assert "inspyro://manifest" in resource_uris
         assert "inspyro://session/notebooks" in resource_uris
         assert "inspyro://examples/notebook-docx-report" in resource_uris
@@ -653,6 +655,7 @@ async def test_mcp_ai_first_catalog_exposes_guides_and_prompts(fake_bridge: Fake
         assert "get_pdf_status" not in tool_names
 
         start_here = _resource_text(await client.read_resource("inspyro://guides/start-here"))
+        client_configuration_guide = _resource_text(await client.read_resource("inspyro://guides/client-configuration"))
         docx_guide = _resource_text(await client.read_resource("inspyro://guides/docx-quickstart"))
         artifact_guide = _resource_text(await client.read_resource("inspyro://guides/artifact-lifecycle"))
         recovery_guide = _resource_text(await client.read_resource("inspyro://guides/error-recovery"))
@@ -669,13 +672,21 @@ async def test_mcp_ai_first_catalog_exposes_guides_and_prompts(fake_bridge: Fake
         document_tool = next(tool for tool in tools if str(tool.name) == "get_document_docx")
 
         assert "inspyro://guides/notebook-workflow" in start_here
+        assert "inspyro://guides/client-configuration" in start_here
         assert "`kernel_id`" in start_here
+        assert "Claude Desktop" in client_configuration_guide
+        assert "Cursor MCP" in client_configuration_guide
+        assert "VS Code MCP" in client_configuration_guide
+        assert "stateful-http" in client_configuration_guide
+        assert "--stdio" in client_configuration_guide
+        assert "`stateless-http` no sirve para notebooks" in client_configuration_guide
         assert "build_doc" in example
         assert "get_document_docx" in example
         assert "check_document_quality" in docx_guide
         assert "check_document_quality" in artifact_guide
         assert "missing_quality" in recovery_guide
         assert "resource_templates" in manifest
+        assert "inspyro://guides/client-configuration" in manifest
         assert "inspyro://guides/start-here" in prompt
         assert "inspyro://examples/notebook-docx-report" in prompt
         assert system_info_resource_payload["workspace_path"] == str(fake_bridge.root)
